@@ -1,0 +1,77 @@
+Tech Team Execution Brief
+Graph-Based Proactive Shell Company & Corporate Fraud Detection System (MCA21 Filing Network Analysis)
+1. Problem Statement Definition
+Title: Graph-Based Proactive Shell Company & Corporate Fraud Detection System using MCA21 Filing Network Analysis.
+Ministry: Ministry of Corporate Affairs (MCA).
+Shell companies are entities that exist on paper but conduct little or no genuine business. They are used across all stages of money laundering, tax evasion, circular trading, and Input Tax Credit (ITC) fraud. Every company registered in India files structured data with the Registrar of Companies via MCA21 — director identities (DIN), registered address, incorporation date, capital structure, and filing status. Despite this data being publicly filed, detection of shell-company networks remains largely reactive: agencies act after a complaint or scam surfaces, not by continuously screening the relationship graph hidden inside this public data.
+What we are building: A system that converts MCA-style company filing data into a relationship graph (Company – Director – Address) and applies graph analytics to proactively flag structurally anomalous clusters — companies that look independent on paper but are actually connected through shared directors, shared addresses, and suspiciously-timed incorporation — before any complaint is filed.
+What we are NOT claiming: We are not claiming to definitively identify fraud. Shell-company status is not a labelled field in any government dataset — it is a behavioural pattern inferred by investigators. Our system flags structurally anomalous clusters for human review; it does not make an automated fraud determination.
+2. Real Case Study — ₹734 Crore GST ITC Fraud (135 Shell Companies)
+Sources: Enforcement Directorate prosecution complaint, July 2025 (caclubindia.com, prokerala.com, the420.in, a2ztaxcorp.net). This is a real, publicly reported case — used here to ground our design in an actual documented fraud pattern, not a hypothetical.
+In May 2025, the Enforcement Directorate (ED) arrested four men — Shiva Kumar Deora, Mohit Deora, Amit Kumar Gupta, and Amit Agarwal — for orchestrating one of the largest GST Input Tax Credit (ITC) fraud syndicates uncovered in India. The investigation began after the Directorate General of GST Intelligence (DGGI), Jamshedpur, flagged suspicious ITC claims and referred the case onward.
+The syndicate floated approximately 135 shell companies on paper across Jharkhand and West Bengal. These companies had no real business activity — no actual goods or services were ever supplied. Instead, the network issued fake invoices worth an estimated ₹5,000 crore among themselves and to outside beneficiary firms. Because GST law allows a business to claim Input Tax Credit against tax already paid by a supplier, these fabricated invoices allowed the syndicate to generate ₹734 crore in fraudulent ITC — credit that was never backed by any real transaction. This fraudulent credit was then sold, for a commission, to genuine businesses across the country, who used it to illegally offset their own real GST liabilities.
+The structural pattern is exactly what our system is designed to catch: a large number of companies (135) were incorporated and controlled by a small handful of real masterminds, using accomplices' identities as directors, almost certainly sharing addresses, registration patterns, and incorporation timing across the network. Individually, each shell company's filing looked like an unremarkable small business. It was only the relationship structure across all 135 entities — visible only once someone connects the dots between directors, addresses, and incorporation timing — that revealed the fraud. By the time DGGI and ED uncovered this, an estimated ₹5,000 crore in fake invoices had already been generated. This is precisely the detection lag our proactive graph-screening approach is designed to shrink.
+3. What Data Will Actually Arrive
+3.1 Real data (verified, free, no paid API needed)
+Source
+What it gives us
+Format / access
+data.gov.in — Company Master Data
+Bulk company-level records: CIN, name, status, class, category, authorized/paid-up capital, registration date, ROC, registered state, registered office address
+Free bulk CSV/ZIP download, organized by Registrar of Companies (ROC)
+MCA21 V3 portal (mca.gov.in)
+Per-company/per-director lookup: director names, DIN, and each director's linked companies
+Free, no login, one lookup at a time — not bulk
+Confirm on Day 1, first task: download one ROC's bulk file and check its actual columns for director-level fields. Do not assume director data is present in the bulk file until this is checked directly — treat director linkage as coming from the V3 portal lookups unless proven otherwise.
+3.2 Synthetic augmentation (necessary, and this is standard practice — not a shortcut)
+No public dataset anywhere labels which companies are confirmed shells — that data does not exist publicly for good reason (fraud investigations are confidential until prosecution). Every academic paper in this space (see the Luna et al. 2018 and related literature already compiled for this project) uses synthetic or simulated data for the same reason. Our approach:
+Take a real subsample of company records (e.g. 500-1000 companies from one ROC region) as the background — real address distribution, real capital ranges, real incorporation-date spread.
+Generate ONE embedded synthetic ring of 8-10 companies modeled on the ₹734 crore case pattern: shared 2-3 director identities, a shared registered address, incorporation dates clustered in a short window, and nil/missing filings.
+Set detection thresholds from the real background data's own statistics BEFORE testing whether the ring gets flagged — this is the fairness rule the whole team must follow. Do not tune thresholds after seeing the result.
+4. What To Actually Do With The Data
+4.1 Build the graph
+Three node types: Company, Director, Address. Two edge types: DIRECTOR_OF (Director → Company), REGISTERED_AT (Company → Address). Use NetworkX in Python — no graph database needed at this scale.
+4.2 Compute four signals (all derived directly from the fields above)
+Signal
+What field(s) it uses
+Why it indicates risk (grounded in the case study)
+Address clustering density
+Registered office address
+In the ₹734 cr case, 135 shell companies were controlled by 4 people — a real business does not need dozens of unrelated companies at one address.
+Director degree centrality
+Director name + DIN
+The syndicate used accomplices' identities as directors across many companies — a real professional is rarely a director of dozens of unrelated firms simultaneously.
+Incorporation-burst detection
+Incorporation date
+Shell networks are typically floated in batches within a short window to serve one fraud campaign, not organically over years.
+Capital–filing mismatch
+Authorized/paid-up capital + filing status
+Shell companies often declare capital on paper while filing nil or no returns — no real paid-up capital or business activity ever follows.
+4.3 Score and cluster
+Compute a per-company composite Shell Likelihood Score from the four signals above (weighted sum, normalized 0-100).
+Run Louvain community detection over the full graph to find densely-connected sub-groups — this is what surfaces a 135-company-style ring as one connected cluster rather than 135 isolated flags.
+Compute a per-cluster Network Risk Score (average of the member companies' signals + incorporation-date variance within the cluster).
+Rank clusters by score; the highest-ranked clusters are the ones presented for review, each with an evidence trail (which signal fired, and by how much).
+5. How To Ensure Maximum Accuracy
+5.1 Set thresholds honestly, not to win the demo
+Compute the mean and standard deviation of director-degree and address-degree across the REAL background data only, before the synthetic ring is added. Use a z-score threshold (e.g. mean + 2 standard deviations) derived from that real distribution. Only after this is fixed, run detection against the combined (real + synthetic ring) dataset. This order matters — reversing it (tuning after seeing the result) is the exact rigging that will not survive judge questioning.
+5.2 Reduce false positives with multi-signal confirmation, not single-signal flags
+Do not flag a company as high-risk from one signal alone. A single company sharing an address with one other business (e.g. a shared CA-firm registered address) is normal and will otherwise generate a false positive. Require multiple signals to co-occur within the same cluster (shared address AND shared director AND tight incorporation window) before a cluster is ranked as high-risk — this mirrors exactly what made the ₹734 cr case identifiable: it was the combination of shared identities, shared geography, and coordinated timing together, not any single fact alone.
+5.3 Test against a deliberate legitimate-pattern edge case
+Include at least one legitimate high-degree entity in the background data on purpose (e.g. a simulated registered-agent address genuinely shared by several unrelated real businesses, or a holding company with several genuine subsidiaries sharing directors). Confirm the system does NOT rank this the same as the fraud ring — showing this distinction live is the single strongest accuracy proof available, because it demonstrates the system separates "structurally unusual" from "confirmed suspicious pattern."
+5.4 Use DIN, never name strings, as the director identity key
+Common Indian names repeat constantly across unrelated people. If director identity is matched by name string instead of DIN, the system will falsely merge unrelated people who happen to share a name — destroying both precision and credibility. Always join on DIN.
+5.5 Measure and report honestly
+Metric
+What it proves
+Precision on the planted ring
+True flagged shell entities ÷ total flagged entities — proves the system isn't crying wolf.
+Detection rank of the planted ring
+Where the true ring lands in the ranked output — an investigator only has bandwidth to review the top few; ranking near the top is the real proof point.
+False-positive rate on real background data
+Flagged ÷ total real companies — the core credibility number; should be low single digits or lower.
+Behaviour on the legitimate edge case
+Qualitative — does the evidence trail correctly look different for a genuine high-degree entity vs the fraud ring?
+Do not claim the system has been validated against real historical ED/SFIO case data beyond using this case study for design grounding — that would require access to confidential investigation records the team does not have. State this limitation honestly if asked.
+6. One-Line Summary For The Team
+Real MCA company data (free, from data.gov.in) + real director-lookup data (from MCA21 V3) get built into a Company–Director–Address graph. Four signals — address clustering, director centrality, incorporation bursts, and capital-filing mismatch — feed a composite score. Louvain community detection groups connected companies into clusters. Thresholds are set from real data statistics before testing, never after. A synthetic ring modeled on the real ₹734 crore, 135-shell-company case is planted to prove detection works, and a genuine legitimate-pattern edge case is tested alongside it to prove the system doesn't over-flag. That combination — real data, grounded design, honest thresholds, and a tested negative case — is what maximizes both actual accuracy and how defensible the accuracy claim is in front of judges.
