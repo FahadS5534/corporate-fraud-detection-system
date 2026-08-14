@@ -21,6 +21,48 @@ def normalize_address(address_str):
     clean = " ".join(clean.split())
     return clean
 
+def geocode_address_offline(address_str):
+    if not address_str:
+        return 28.6139, 77.2090
+    address_upper = str(address_str).upper()
+    
+    # Major corporate hubs in India
+    cities = {
+        "MUMBAI": (19.0760, 72.8777),
+        "BOMBAY": (19.0760, 72.8777),
+        "DELHI": (28.6139, 77.2090),
+        "NEW DELHI": (28.6139, 77.2090),
+        "NOIDA": (28.5355, 77.3910),
+        "GURGAON": (28.4595, 77.0266),
+        "GURUGRAM": (28.4595, 77.0266),
+        "BANGALORE": (12.9716, 77.5946),
+        "BENGALURU": (12.9716, 77.5946),
+        "CHENNAI": (13.0827, 80.2707),
+        "MADRAS": (13.0827, 80.2707),
+        "KOLKATA": (22.5726, 88.3639),
+        "CALCUTTA": (22.5726, 88.3639),
+        "HYDERABAD": (17.3850, 78.4867),
+        "PUNE": (18.5204, 73.8567),
+        "AHMEDABAD": (23.0225, 72.5714),
+        "JAIPUR": (26.9124, 75.7873),
+        "LUCKNOW": (26.8467, 80.9462),
+    }
+    
+    base_lat, base_lng = 28.6139, 77.2090
+    for city, coords in cities.items():
+        if city in address_upper:
+            base_lat, base_lng = coords
+            break
+            
+    import hashlib
+    addr_hash = int(hashlib.md5(address_str.encode('utf-8')).hexdigest(), 16)
+    
+    # Deterministic scatter (jitter) within ~3km so they scatter nicely around the city hub
+    jitter_lat = ((addr_hash % 1000) / 1000.0 - 0.5) * 0.03
+    jitter_lng = (((addr_hash // 1000) % 1000) / 1000.0 - 0.5) * 0.03
+    
+    return base_lat + jitter_lat, base_lng + jitter_lng
+
 class GraphService:
     def __init__(self, db: Session = None):
         self.db = db or SessionLocal()
@@ -57,10 +99,13 @@ class GraphService:
             # Add Address Node if valid
             if norm_addr:
                 if not self.graph.has_node(norm_addr):
+                    lat, lng = geocode_address_offline(norm_addr)
                     self.graph.add_node(
                         norm_addr,
                         type="address",
-                        raw_address=comp.registered_office_address
+                        raw_address=comp.registered_office_address,
+                        latitude=lat,
+                        longitude=lng
                     )
                 # Add edge: Company is REGISTERED_AT Address
                 self.graph.add_edge(comp.cin, norm_addr, relation="REGISTERED_AT")

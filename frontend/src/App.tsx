@@ -132,8 +132,11 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
   
+  const [viewMode, setViewMode] = useState<'graph' | 'map'>('graph');
   const cyRef = useRef<HTMLDivElement>(null);
   const cyInstance = useRef<any>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
+  const mapInstance = useRef<any>(null);
 
   // Fetch summary and cluster list on startup
   useEffect(() => {
@@ -150,13 +153,88 @@ export default function App() {
 
   // Trigger graph rendering when switching tabs or when graph elements load
   useEffect(() => {
-    if (activeTab === 'explorer' && graphElements) {
+    if (activeTab === 'explorer' && viewMode === 'graph' && graphElements) {
       const timer = setTimeout(() => {
         initCytoscape(graphElements);
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [activeTab, graphElements]);
+  }, [activeTab, viewMode, graphElements]);
+
+  // Initialize/Update Leaflet Map
+  useEffect(() => {
+    if (activeTab === 'explorer' && viewMode === 'map' && graphElements) {
+      const addressNodes = graphElements.filter((el: any) => el.data.type === 'address' && el.data.latitude && el.data.longitude);
+      
+      if (addressNodes.length === 0) return;
+
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+
+      if (!mapRef.current) return;
+
+      const lats = addressNodes.map((n: any) => n.data.latitude);
+      const lngs = addressNodes.map((n: any) => n.data.longitude);
+      const avgLat = lats.reduce((a: number, b: number) => a + b, 0) / lats.length;
+      const avgLng = lngs.reduce((a: number, b: number) => a + b, 0) / lngs.length;
+
+      const L = (window as any).L;
+      if (!L) return;
+
+      const map = L.map(mapRef.current).setView([avgLat, avgLng], 12);
+      mapInstance.current = map;
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+      }).addTo(map);
+
+      addressNodes.forEach((node: any) => {
+        const { latitude, longitude, id, raw_address } = node.data;
+        
+        const connectedCompanies = graphElements.filter((el: any) => 
+          el.data.source === id || el.data.target === id
+        ).map((el: any) => {
+          const otherId = el.data.source === id ? el.data.target : el.data.source;
+          const companyNode = graphElements.find((nodeEl: any) => nodeEl.data.id === otherId && nodeEl.data.type === 'company');
+          return companyNode ? companyNode.data.label : null;
+        }).filter(Boolean);
+
+        const count = connectedCompanies.length;
+        const color = count >= 3 ? '#DC2626' : count >= 2 ? '#D97706' : '#1E3B8A';
+        
+        const customIcon = L.divIcon({
+          html: `<div style="background-color: ${color}; border: 2px solid white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${count}</div>`,
+          className: 'custom-map-marker',
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+
+        const popupContent = `
+          <div style="font-family: Inter, sans-serif; font-size: 11px; padding: 4px; max-width: 220px;">
+            <div style="font-weight: 800; color: #1E293B; margin-bottom: 4px; text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px;">Address Coordinate</div>
+            <div style="font-weight: 500; color: #475569; margin-bottom: 8px; line-height: 1.4;">${raw_address}</div>
+            <div style="font-weight: 800; color: #0F172A; border-top: 1px solid #E2E8F0; padding-top: 6px; margin-bottom: 4px;">Registered Entities (${count}):</div>
+            <ul style="margin: 0; padding: 0 0 0 12px; color: #1E3A8A; font-weight: 600; line-height: 1.5;">
+              ${connectedCompanies.map((c: string) => `<li>${c}</li>`).join('')}
+            </ul>
+          </div>
+        `;
+
+        L.marker([latitude, longitude], { icon: customIcon })
+          .addTo(map)
+          .bindPopup(popupContent);
+      });
+    }
+
+    return () => {
+      if (mapInstance.current) {
+        mapInstance.current.remove();
+        mapInstance.current = null;
+      }
+    };
+  }, [activeTab, viewMode, graphElements]);
 
   const fetchSummary = async () => {
     try {
@@ -799,69 +877,94 @@ export default function App() {
               </div>
             </div>
 
-            {/* Center Column: Cytoscape Graph Canvas */}
+            {/* Center Column: Cytoscape Graph Canvas / Leaflet Map */}
             <div className="lg:col-span-2 glass-panel p-4 flex flex-col gap-3 min-h-[480px]">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <div className="flex items-center space-x-2 text-xs">
-                  <Network className="w-4 h-4 text-slate-500" />
-                  <span className="font-bold text-slate-700 uppercase tracking-wider">Relationship Modularity Graph</span>
-                </div>
-                <div className="flex space-x-1.5">
-                  <button 
-                    onClick={recenterGraph}
-                    title="Fit view"
-                    className="p-1.5 rounded bg-white border border-slate-200 text-slate-600 hover:text-slate-900 transition-all hover:bg-slate-50 shadow-xs"
-                  >
-                    <Maximize2 className="w-3.5 h-3.5" />
-                  </button>
+                <div className="flex items-center space-x-2">
                   <div className="flex items-center bg-slate-100 rounded border border-slate-200 p-0.5">
                     <button 
-                      onClick={() => changeLayout('cose')}
-                      className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'cose' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      onClick={() => setViewMode('graph')}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'graph' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
-                      COSE
+                      <Network className="w-3.5 h-3.5" /> Graph View
                     </button>
                     <button 
-                      onClick={() => changeLayout('circle')}
-                      className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'circle' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      onClick={() => setViewMode('map')}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'map' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
-                      Circle
-                    </button>
-                    <button 
-                      onClick={() => changeLayout('grid')}
-                      className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'grid' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
-                    >
-                      Grid
+                      <MapPin className="w-3.5 h-3.5" /> Map View
                     </button>
                   </div>
                 </div>
-              </div>
-
-              {/* The Graph Canvas */}
-              <div className="flex-1 bg-white rounded-lg relative border border-slate-200 overflow-hidden">
-                {loading && (
-                  <div className="absolute inset-0 bg-white/80 backdrop-blur-xs z-10 flex items-center justify-center space-x-2">
-                    <RefreshCw className="w-5 h-5 text-slate-700 animate-spin" />
-                    <span className="text-xs font-bold text-slate-500">Recalculating network coordinates...</span>
+                
+                {viewMode === 'graph' ? (
+                  <div className="flex space-x-1.5">
+                    <button 
+                      onClick={recenterGraph}
+                      title="Fit view"
+                      className="p-1.5 rounded bg-white border border-slate-200 text-slate-600 hover:text-slate-900 transition-all hover:bg-slate-50 shadow-xs"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                    <div className="flex items-center bg-slate-100 rounded border border-slate-200 p-0.5">
+                      <button 
+                        onClick={() => changeLayout('cose')}
+                        className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'cose' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        COSE
+                      </button>
+                      <button 
+                        onClick={() => changeLayout('circle')}
+                        className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'circle' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        Circle
+                      </button>
+                      <button 
+                        onClick={() => changeLayout('grid')}
+                        className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'grid' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      >
+                        Grid
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
+                    <MapPin className="w-3 h-3 text-red-600" /> Geographic Clustering
                   </div>
                 )}
-                <div ref={cyRef} className="w-full h-full min-h-[420px]" />
-                
-                {/* Node type legends */}
-                <div className="absolute bottom-3 left-3 bg-white/95 border border-slate-200 px-3 py-2 rounded-lg flex flex-col gap-1.5 text-[9px] font-semibold text-slate-500 pointer-events-none shadow-xs">
-                  <div className="flex items-center space-x-2">
-                    <span className="w-3.5 h-3 bg-blue-900 border border-blue-700" style={{ clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' }}></span>
-                    <span>Company (Hexagon)</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="w-3 h-3 rounded-full bg-emerald-800 border border-emerald-600"></span>
-                    <span>Director (Circle)</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="w-3.5 h-3 bg-amber-900 border border-amber-700"></span>
-                    <span>Address (Square)</span>
-                  </div>
-                </div>
+              </div>
+
+              {/* The Display Canvas */}
+              <div className="flex-1 bg-white rounded-lg relative border border-slate-200 overflow-hidden min-h-[420px]">
+                {viewMode === 'graph' ? (
+                  <>
+                    {loading && (
+                      <div className="absolute inset-0 bg-white/80 backdrop-blur-xs z-10 flex items-center justify-center space-x-2">
+                        <RefreshCw className="w-5 h-5 text-slate-700 animate-spin" />
+                        <span className="text-xs font-bold text-slate-500">Recalculating network coordinates...</span>
+                      </div>
+                    )}
+                    <div ref={cyRef} className="w-full h-full min-h-[420px]" />
+                    
+                    {/* Node type legends */}
+                    <div className="absolute bottom-3 left-3 bg-white/95 border border-slate-200 px-3 py-2 rounded-lg flex flex-col gap-1.5 text-[9px] font-semibold text-slate-500 pointer-events-none shadow-xs z-10">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-3.5 h-3 bg-blue-900 border border-blue-700" style={{ clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' }}></span>
+                        <span>Company (Hexagon)</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="w-3 h-3 rounded-full bg-emerald-800 border border-emerald-600"></span>
+                        <span>Director (Circle)</span>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="w-3.5 h-3 bg-amber-900 border border-amber-700"></span>
+                        <span>Address (Square)</span>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div ref={mapRef} className="w-full h-full min-h-[420px]" style={{ zIndex: 1 }} />
+                )}
               </div>
             </div>
 
