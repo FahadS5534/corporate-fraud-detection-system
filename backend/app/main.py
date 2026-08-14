@@ -119,6 +119,8 @@ def get_all_clusters():
         summary_clusters.append({
             "rank": idx + 1,
             "cluster_id": c["cluster_id"],
+            "cluster_name": c.get("cluster_name", f"Cluster {c['cluster_id']}"),
+            "company_names": c.get("company_names", []),
             "companies_count": c["companies_count"],
             "directors_count": c["directors_count"],
             "addresses_count": c["addresses_count"],

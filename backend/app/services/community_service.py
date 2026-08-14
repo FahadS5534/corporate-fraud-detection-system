@@ -55,10 +55,22 @@ class CommunityService:
             # Compute company risk scores
             comp_scores = []
             inc_dates = []
+            company_names = []
+            
+            highest_risk_cin = None
+            highest_risk_score = -1.0
             
             for cin in companies:
                 res = self.score_engine.compute_scores(cin, self.graph)
-                comp_scores.append(res["scores"]["composite_score"])
+                score = res["scores"]["composite_score"]
+                comp_scores.append(score)
+                
+                cname = self.graph.nodes[cin].get("name", cin)
+                company_names.append(cname)
+                
+                if score > highest_risk_score:
+                    highest_risk_score = score
+                    highest_risk_cin = cin
                 
                 date_str = self.graph.nodes[cin].get("incorporation_date", "")
                 if date_str:
@@ -68,6 +80,15 @@ class CommunityService:
                         pass
                         
             avg_company_risk = float(np.mean(comp_scores)) if comp_scores else 0.0
+            
+            # Name the cluster based on its highest risk company
+            highest_risk_name = self.graph.nodes[highest_risk_cin].get("name", highest_risk_cin) if highest_risk_cin else f"Cluster {comm_id}"
+            if highest_risk_score >= 75.0:
+                cluster_name = f"{highest_risk_name} Syndicate"
+            elif highest_risk_score >= 40.0:
+                cluster_name = f"{highest_risk_name} Risk Network"
+            else:
+                cluster_name = f"{highest_risk_name} Group"
             
             # Date spread calculation
             if len(inc_dates) >= 2:
@@ -82,10 +103,6 @@ class CommunityService:
             density = float(nx.density(subg))
             
             # Compute structural risk (0-100)
-            # Higher risk if:
-            # - More companies share directors/addresses (size of community > 3)
-            # - Tight incorporation dates (spread < 45 days)
-            # - High subgraph density
             struct_risk = 0.0
             if len(companies) >= 3:
                 struct_risk += 30.0 # base structural penalty for size
@@ -99,10 +116,12 @@ class CommunityService:
             
             processed_clusters.append({
                 "cluster_id": comm_id,
+                "cluster_name": cluster_name,
                 "companies_count": len(companies),
                 "directors_count": len(directors),
                 "addresses_count": len(addresses),
                 "companies": companies,
+                "company_names": company_names,
                 "directors": directors,
                 "addresses": addresses,
                 "average_company_risk": avg_company_risk,

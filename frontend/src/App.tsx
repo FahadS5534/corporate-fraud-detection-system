@@ -45,6 +45,8 @@ interface SummaryData {
 interface ClusterSummary {
   rank: number;
   cluster_id: number;
+  cluster_name: string;
+  company_names: string[];
   companies_count: number;
   directors_count: number;
   addresses_count: number;
@@ -71,6 +73,7 @@ interface CompanyDetail {
 
 interface ClusterDetail {
   cluster_id: number;
+  cluster_name?: string;
   companies_count: number;
   directors_count: number;
   addresses_count: number;
@@ -400,11 +403,18 @@ export default function App() {
     }
   };
 
-  const filteredClusters = clusters.filter(c => 
-    c.cluster_id.toString().includes(searchQuery) ||
-    c.companies_count.toString().includes(searchQuery) ||
-    Math.round(c.cluster_risk_score).toString().includes(searchQuery)
-  );
+  const filteredClusters = clusters.filter(c => {
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+    
+    const matchesId = c.cluster_id.toString().includes(q);
+    const matchesName = c.cluster_name?.toLowerCase().includes(q);
+    const matchesCompany = c.company_names?.some(name => name.toLowerCase().includes(q));
+    const matchesRisk = Math.round(c.cluster_risk_score).toString().includes(q);
+    const matchesCount = c.companies_count.toString().includes(q);
+    
+    return matchesId || matchesName || matchesCompany || matchesRisk || matchesCount;
+  });
 
   const riskDistributionData = clusters.reduce((acc: any[], curr) => {
     const score = curr.cluster_risk_score;
@@ -648,7 +658,7 @@ export default function App() {
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input 
                   type="text"
-                  placeholder="Filter by Cluster ID or Size..."
+                  placeholder="Search by Company or Cluster Name..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="bg-slate-50 border border-slate-300 rounded-md pl-8 pr-4 py-1.5 text-xs text-slate-700 focus:outline-none focus:border-slate-500 w-[240px]"
@@ -661,7 +671,7 @@ export default function App() {
                 <thead>
                   <tr>
                     <th>Rank</th>
-                    <th>Cluster ID</th>
+                    <th>Target Entity Group / Syndicate</th>
                     <th>Companies</th>
                     <th>Directors</th>
                     <th>Addresses</th>
@@ -675,7 +685,10 @@ export default function App() {
                   {filteredClusters.map((c) => (
                     <tr key={c.cluster_id} className={c.cluster_risk_score >= 75 ? 'bg-red-50/30' : ''}>
                       <td className="font-bold text-slate-400">#{c.rank}</td>
-                      <td className="font-semibold text-slate-800 font-mono">Cluster {c.cluster_id}</td>
+                      <td>
+                        <div className="font-bold text-slate-900 leading-tight">{c.cluster_name}</div>
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">Cluster ID: #{c.cluster_id}</div>
+                      </td>
                       <td>{c.companies_count}</td>
                       <td>{c.directors_count}</td>
                       <td>{c.addresses_count}</td>
@@ -720,8 +733,20 @@ export default function App() {
             {/* Left Column: Cluster directory */}
             <div className="glass-panel p-4 flex flex-col gap-4 max-h-[580px] overflow-y-auto">
               <div className="border-b border-slate-100 pb-3">
-                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Selected Modularity Cluster</span>
-                <h3 className="text-base font-bold text-slate-900 mt-1 font-mono">Cluster #{clusterDetail?.cluster_id}</h3>
+                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Active Investigation Target</span>
+                <div className="mt-1.5">
+                  <select 
+                    value={selectedClusterId || ''}
+                    onChange={(e) => setSelectedClusterId(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 font-bold focus:outline-none focus:border-slate-500"
+                  >
+                    {clusters.map((c) => (
+                      <option key={c.cluster_id} value={c.cluster_id}>
+                        Rank #{c.rank}: {c.cluster_name} (Risk: {c.cluster_risk_score.toFixed(0)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 <div className="grid grid-cols-2 gap-2 mt-3 text-[10px] text-slate-500 bg-slate-50 p-2.5 rounded border border-slate-200 font-semibold">
                   <div>Companies: <span className="text-slate-800">{clusterDetail?.companies_count}</span></div>
                   <div>Directors: <span className="text-slate-800">{clusterDetail?.directors_count}</span></div>
