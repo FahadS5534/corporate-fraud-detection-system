@@ -370,11 +370,50 @@ def compute_cluster_score(
             )
 
     # ---- Final result object ----------------------------------------------
+    score_breakdown = [
+        {
+            "label": "Director concentration",
+            "weight": 25,
+            "signal_score": round(s_director, 2),
+            "contribution": round(0.25 * s_director, 2),
+            "reason": f"Average of {avg_dir_deg:.1f} director links per company, normalised against the normal-company baseline.",
+        },
+        {
+            "label": "Registered-address concentration",
+            "weight": 25,
+            "signal_score": round(s_address, 2),
+            "contribution": round(0.25 * s_address, 2),
+            "reason": f"{avg_addr_deg:.1f} companies share the registered address; the alert threshold is {addr_threshold:.1f}.",
+        },
+        {
+            "label": "Incorporation timing",
+            "weight": 15,
+            "signal_score": round(s_burst, 2),
+            "contribution": round(0.15 * s_burst, 2),
+            "reason": f"Incorporation-window signal is {s_burst:.0f}/100 over a {spread_days}-day span.",
+        },
+        {
+            "label": "Shared lender",
+            "weight": 15,
+            "signal_score": round(s_lender, 2),
+            "contribution": round(0.15 * s_lender, 2),
+            "reason": f"{s_lender:.0f}% of companies share the same lender" + (f" ({top_lender})." if top_lender else "."),
+        },
+        {
+            "label": "Wilful-defaulter status",
+            "weight": 20,
+            "signal_score": round(s_defaulter, 2),
+            "contribution": round(0.20 * s_defaulter, 2),
+            "reason": f"{deflt_count} of {deflt_total} companies are marked as wilful defaulters.",
+        },
+    ]
+
     return {
         "cluster_id":   cluster_id,
         "risk_score":   composite,
         "risk_level":   _risk_level(composite),
         "explanations": explanations,
+        "score_breakdown": score_breakdown,
         "company_cins": cluster_cins,
         "metrics": {
             "avg_director_degree":     round(avg_dir_deg, 3),
@@ -467,4 +506,5 @@ class ScoreEngine:
                 "name": G.nodes[company_cin].get("name", "") if G.has_node(company_cin) else "",
             },
             "explanations": result["explanations"],
+            "score_breakdown": result["score_breakdown"],
         }

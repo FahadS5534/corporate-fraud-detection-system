@@ -67,6 +67,8 @@ interface CompanyDetail {
     director_risk: number;
     temporal_risk: number;
     capital_filing_risk: number;
+    lender_risk: number;
+    defaulter_risk: number;
     composite_score: number;
   };
 }
@@ -94,11 +96,19 @@ interface EvidenceData {
     address_risk: number;
     director_risk: number;
     temporal_risk: number;
-    capital_filing_risk: number;
+    lender_risk: number;
+    defaulter_risk: number;
     composite_score: number;
   };
   raw_signals: any;
   evidence_trail: string[];
+  score_breakdown: Array<{
+    label: string;
+    weight: number;
+    signal_score: number;
+    contribution: number;
+    reason: string;
+  }>;
 }
 
 interface EvaluationMetrics {
@@ -131,6 +141,7 @@ export default function App() {
   const [layoutType, setLayoutType] = useState('cose');
   const [loading, setLoading] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [evaluationMessage, setEvaluationMessage] = useState<string | null>(null);
   
   const [viewMode, setViewMode] = useState<'graph' | 'map'>('graph');
   const cyRef = useRef<HTMLDivElement>(null);
@@ -292,14 +303,20 @@ export default function App() {
 
   const triggerEvaluation = async () => {
     setEvaluating(true);
+    setEvaluationMessage('Running validation checks against the current risk graph...');
     try {
       const res = await fetch(`${API_BASE}/api/evaluation`);
+      if (!res.ok) {
+        throw new Error(`Validation request failed (${res.status})`);
+      }
       const data = await res.json();
       setEvaluation(data);
       fetchSummary();
       fetchClusters();
+      setEvaluationMessage(`Validation completed at ${new Date().toLocaleTimeString()}: ${data.status}.`);
     } catch (e) {
       console.error("Failed to run evaluation", e);
+      setEvaluationMessage('Validation could not complete. Check that the backend is running and try again.');
     } finally {
       setEvaluating(false);
     }
@@ -1015,7 +1032,8 @@ export default function App() {
                               { name: 'Addr', score: evidence.individual_scores.address_risk },
                               { name: 'Dir', score: evidence.individual_scores.director_risk },
                               { name: 'Burst', score: evidence.individual_scores.temporal_risk },
-                              { name: 'Cap', score: evidence.individual_scores.capital_filing_risk }
+                              { name: 'Lender', score: evidence.individual_scores.lender_risk },
+                              { name: 'Default', score: evidence.individual_scores.defaulter_risk }
                             ]}
                             margin={{ top: 5, right: 5, left: -35, bottom: 0 }}
                           >
@@ -1031,9 +1049,20 @@ export default function App() {
                       {/* Evidence Logs */}
                       <div className="flex-1 flex flex-col gap-2 min-h-0">
                         <h4 className="text-[10px] font-bold text-slate-700 uppercase tracking-wider border-b border-slate-100 pb-1.5 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-slate-600" /> Evidence Audit Trail
+                          <CheckCircle2 className="w-3.5 h-3.5 text-slate-600" /> Score explanation
                         </h4>
                         <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-[10.5px]">
+                          <p className="text-slate-500 leading-relaxed">Composite score: weighted signal points, capped at 100.</p>
+                          {evidence.score_breakdown.map((item) => (
+                            <div key={item.label} className="p-2.5 rounded border bg-slate-50 border-slate-200 text-slate-600 leading-relaxed">
+                              <div className="flex items-start justify-between gap-2">
+                                <span className="font-bold text-slate-800">{item.label}</span>
+                                <span className="shrink-0 font-bold text-slate-900">+{item.contribution.toFixed(1)} pts</span>
+                              </div>
+                              <div className="mt-1">Signal: {item.signal_score.toFixed(0)}/100 × {item.weight}% weight. {item.reason}</div>
+                            </div>
+                          ))}
+                          <h5 className="pt-2 text-[9px] font-bold text-slate-500 uppercase tracking-wider">Supporting evidence</h5>
                           {evidence.evidence_trail.map((log, index) => (
                             <div 
                               key={index} 
@@ -1089,6 +1118,11 @@ export default function App() {
                   <Award className="w-5 h-5 text-slate-700" /> Pipeline Validation Suite
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">Verification of planted positive detection limits and false positive thresholds.</p>
+                {evaluationMessage && (
+                  <p className={`text-[10px] font-semibold mt-2 ${evaluating ? 'text-amber-700' : evaluation?.status === 'PASS' ? 'text-emerald-700' : 'text-red-700'}`}>
+                    {evaluationMessage}
+                  </p>
+                )}
               </div>
               <button 
                 onClick={triggerEvaluation}

@@ -154,6 +154,10 @@ def get_all_clusters():
             "cluster_id":       c["cluster_id"],
             "cluster_name":     c.get("cluster_name", f"Cluster {c['cluster_id']}"),
             "risk_score":       c["risk_score"],
+            # Keep the dashboard's established field names available alongside
+            # the newer score names.
+            "cluster_risk_score": c["risk_score"],
+            "average_company_risk": c["risk_score"],
             "risk_level":       c["risk_level"],
             "explanations":     c["explanations"],
             "company_names":    c.get("company_names", []),
@@ -184,6 +188,7 @@ def get_cluster_detail(cluster_id: int):
             for cin in c["company_cins"]:
                 node_data = COMBINED_GRAPH.nodes.get(cin, {})
                 gt_label  = GT_MAP.get(cin, "unknown")
+                score_data = SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)
                 company_details.append({
                     "cin":                  cin,
                     "name":                 node_data.get("name", ""),
@@ -195,6 +200,7 @@ def get_cluster_detail(cluster_id: int):
                     "paidup_capital":       node_data.get("paidup_capital", 0.0),
                     "wilful_defaulter":     node_data.get("wilful_defaulter_flag", False),
                     "ground_truth_label":   gt_label,
+                    "scores":               score_data["scores"],
                 })
 
             return {
@@ -251,6 +257,10 @@ def get_company_evidence(cin: str):
         "individual_scores": res["scores"],
         "raw_signals":      res["raw_signals"],
         "explanations":     res["explanations"],
+        "score_breakdown":  res["score_breakdown"],
+        # The frontend calls this an evidence trail; retain explanations too
+        # for consumers using the current API terminology.
+        "evidence_trail":   res["explanations"],
     }
 
 
@@ -287,7 +297,34 @@ def get_evaluation_metrics():
     legit_score = le_cluster["risk_score"] if le_cluster else 0
     legit_lower = all(legit_score < rs for rs in ring_scores if rs > 0)
 
+    total_planted = sum(len({cin for cin, lbl in GT_MAP.items() if lbl == label})
+                        for label in ("fraud_ring_A", "fraud_ring_B", "fraud_ring_C"))
+    detected_planted = ra_overlap + rb_overlap + rc_overlap
+    normal_cins = [cin for cin, lbl in GT_MAP.items() if lbl == "normal"]
+    false_positive_count = sum(
+        1
+        for cin in normal_cins
+        if SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)["scores"]["composite_score"] >= 75
+    )
+    planted_ranks = [rank for rank in (ra_rank, rb_rank, rc_rank) if rank > 0]
+    detection_rate = (detected_planted / total_planted * 100) if total_planted else 0.0
+    false_positive_rate = (false_positive_count / len(normal_cins) * 100) if normal_cins else 0.0
+    status = "PASS" if detected_planted == total_planted and false_positive_count == 0 and legit_lower else "FAIL"
+
     return {
+        # Legacy dashboard fields. The detailed ring results below remain the
+        # canonical evaluation output for API consumers.
+        "real_companies": len(normal_cins),
+        "synthetic_fraud_companies": total_planted,
+        "planted_cluster_rank": min(planted_ranks) if planted_ranks else -1,
+        "detected_planted_entities": detected_planted,
+        "total_planted_entities": total_planted,
+        "detection_rate_pct": detection_rate,
+        "false_positive_count": false_positive_count,
+        "false_positive_rate_pct": false_positive_rate,
+        "ca_office_cluster_rank": le_rank,
+        "tata_holding_cluster_rank": le_rank,
+        "status": status,
         "total_clusters":       len(CLUSTERS),
         "fraud_ring_A": {
             "rank":         ra_rank,
