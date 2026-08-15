@@ -1,136 +1,134 @@
+"""
+community_service.py — Louvain Community Detection + Cluster Scoring
+=====================================================================
+Uses networkx.algorithms.community.louvain_communities() (native NetworkX
+implementation, seed=42 for reproducibility) to partition the multi-layer
+graph into communities, then scores each community using score_engine.py.
+"""
+
 import os
 import sys
-import community as community_louvain  # python-louvain
 import networkx as nx
-import pandas as pd
+import networkx.algorithms.community as nx_comm
 import numpy as np
 from datetime import datetime
+from typing import List, Dict, Any, Optional
 
-# Add root folder to sys.path
-sys.path.append(r"f:\SIH")
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", "..", ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
-from backend.app.scoring.score_engine import ScoreEngine
+from backend.app.scoring.score_engine import ScoreEngine, compute_cluster_score
+
 
 class CommunityService:
-    def __init__(self, graph, score_engine: ScoreEngine):
+    """
+    Wraps the Louvain community detection step and cluster scoring.
+
+    Parameters
+    ----------
+    graph        : The full multi-layer NetworkX graph.
+    score_engine : A ScoreEngine instance (holds frozen baseline stats).
+    """
+
+    def __init__(self, graph: nx.Graph, score_engine: ScoreEngine):
         self.graph = graph
         self.score_engine = score_engine
 
-    def detect_communities(self):
+    # ------------------------------------------------------------------
+    # Primary entry point
+    # ------------------------------------------------------------------
+
+    def detect_communities(self) -> List[Dict[str, Any]]:
         """
-        Runs the Louvain algorithm on the relationship graph,
-        filters for clusters containing companies, and calculates metrics for each.
+        1. Run Louvain on the full graph (seed=42).
+        2. For each community with ≥1 company node, compute a cluster score.
+        3. Return clusters sorted by risk_score descending.
+
+        Each returned dict contains:
+          cluster_id, cluster_name, risk_score, risk_level, explanations,
+          company_cins, companies_count, directors_count, addresses_count,
+          lenders_count, metrics, date_spread_days, network_density
         """
-        # Louvain partition (returns dict of {node: community_id})
-        partition = community_louvain.best_partition(self.graph)
-        
-        # Group nodes by community ID
-        clusters_raw = {}
-        for node, comm_id in partition.items():
-            if comm_id not in clusters_raw:
-                clusters_raw[comm_id] = []
-            clusters_raw[comm_id].append(node)
-            
-        processed_clusters = []
-        
-        for comm_id, nodes in clusters_raw.items():
-            # Separate companies, directors, and addresses
-            companies = []
-            directors = []
-            addresses = []
-            
-            for node in nodes:
-                ntype = self.graph.nodes[node].get("type")
-                if ntype == "company":
-                    companies.append(node)
-                elif ntype == "director":
-                    directors.append(node)
-                elif ntype == "address":
-                    addresses.append(node)
-                    
-            # Skip communities that don't contain any companies
+        # Louvain returns a list of frozensets (one per community)
+        communities = nx_comm.louvain_communities(self.graph, seed=42)
+
+        processed = []
+
+        for idx, community_nodes in enumerate(communities):
+            community_nodes = list(community_nodes)
+
+            # Partition nodes by type
+            companies  = [n for n in community_nodes if self.graph.nodes[n].get("type") == "company"]
+            directors  = [n for n in community_nodes if self.graph.nodes[n].get("type") == "director"]
+            addresses  = [n for n in community_nodes if self.graph.nodes[n].get("type") == "address"]
+            lenders    = [n for n in community_nodes if self.graph.nodes[n].get("type") == "lender"]
+
+            # Skip communities with no companies
             if not companies:
                 continue
-                
-            # Compute company risk scores
-            comp_scores = []
-            inc_dates = []
-            company_names = []
-            
-            highest_risk_cin = None
-            highest_risk_score = -1.0
-            
+
+            # Score the cluster
+            score_result = self.score_engine.score_cluster(
+                cluster_id=idx,
+                cluster_cins=companies,
+                G=self.graph,
+            )
+
+            # Incorporation date spread
+            dates = []
             for cin in companies:
-                res = self.score_engine.compute_scores(cin, self.graph)
-                score = res["scores"]["composite_score"]
-                comp_scores.append(score)
-                
-                cname = self.graph.nodes[cin].get("name", cin)
-                company_names.append(cname)
-                
-                if score > highest_risk_score:
-                    highest_risk_score = score
-                    highest_risk_cin = cin
-                
-                date_str = self.graph.nodes[cin].get("incorporation_date", "")
-                if date_str:
+                ds = self.graph.nodes[cin].get("incorporation_date", "")
+                if ds:
                     try:
-                        inc_dates.append(datetime.strptime(date_str, "%Y-%m-%d").date())
+                        dates.append(datetime.strptime(ds, "%Y-%m-%d"))
                     except ValueError:
                         pass
-                        
-            avg_company_risk = float(np.mean(comp_scores)) if comp_scores else 0.0
-            
-            # Name the cluster based on its highest risk company
-            highest_risk_name = self.graph.nodes[highest_risk_cin].get("name", highest_risk_cin) if highest_risk_cin else f"Cluster {comm_id}"
-            if highest_risk_score >= 75.0:
-                cluster_name = f"{highest_risk_name} Syndicate"
-            elif highest_risk_score >= 40.0:
-                cluster_name = f"{highest_risk_name} Risk Network"
-            else:
-                cluster_name = f"{highest_risk_name} Group"
-            
-            # Date spread calculation
-            if len(inc_dates) >= 2:
-                min_date = min(inc_dates)
-                max_date = max(inc_dates)
-                date_spread_days = int((max_date - min_date).days)
-            else:
-                date_spread_days = 0
-                
-            # Subgraph density of community nodes
-            subg = self.graph.subgraph(nodes)
+            date_spread_days = int((max(dates) - min(dates)).days) if len(dates) >= 2 else 0
+
+            # Subgraph density
+            subg = self.graph.subgraph(community_nodes)
             density = float(nx.density(subg))
-            
-            # Compute structural risk (0-100)
-            struct_risk = 0.0
-            if len(companies) >= 3:
-                struct_risk += 30.0 # base structural penalty for size
-            if date_spread_days <= 45 and len(companies) >= 2:
-                struct_risk += 40.0 # high risk for rapid batch registration
-            if density > 0.05:
-                struct_risk += 30.0 # density score
-                
-            # Cluster Risk Score: 60% average member risk + 40% structural risk
-            cluster_risk = (0.6 * avg_company_risk) + (0.4 * struct_risk)
-            
-            processed_clusters.append({
-                "cluster_id": comm_id,
-                "cluster_name": cluster_name,
-                "companies_count": len(companies),
-                "directors_count": len(directors),
-                "addresses_count": len(addresses),
-                "companies": companies,
-                "company_names": company_names,
-                "directors": directors,
-                "addresses": addresses,
-                "average_company_risk": avg_company_risk,
+
+            # Cluster name derived from risk level + top company
+            risk_score = score_result["risk_score"]
+            risk_level = score_result["risk_level"]
+            top_company_name = self.graph.nodes[companies[0]].get("name", companies[0]) if companies else f"Cluster {idx}"
+            if risk_score >= 80:
+                cluster_name = f"{top_company_name} Syndicate"
+            elif risk_score >= 60:
+                cluster_name = f"{top_company_name} Risk Network"
+            elif risk_score >= 35:
+                cluster_name = f"{top_company_name} Watch Group"
+            else:
+                cluster_name = f"{top_company_name} Group"
+
+            company_names = [self.graph.nodes[c].get("name", c) for c in companies]
+
+            processed.append({
+                "cluster_id":       idx,
+                "cluster_name":     cluster_name,
+                "risk_score":       risk_score,
+                "risk_level":       risk_level,
+                "explanations":     score_result["explanations"],
+                "company_cins":     companies,
+                "company_names":    company_names,
+                "companies_count":  len(companies),
+                "directors_count":  len(directors),
+                "addresses_count":  len(addresses),
+                "lenders_count":    len(lenders),
+                "directors":        directors,
+                "addresses":        addresses,
+                "lenders":          lenders,
                 "date_spread_days": date_spread_days,
-                "network_density": density,
-                "cluster_risk_score": float(cluster_risk)
+                "network_density":  round(density, 6),
+                "metrics":          score_result["metrics"],
+                # Legacy field aliases (kept for API compatibility)
+                "companies":        companies,
+                "cluster_risk_score": risk_score,
+                "average_company_risk": risk_score,
             })
-            
-        # Sort clusters by risk score descending
-        processed_clusters.sort(key=lambda x: x["cluster_risk_score"], reverse=True)
-        
-        return processed_clusters
+
+        # Sort by risk_score descending
+        processed.sort(key=lambda x: x["risk_score"], reverse=True)
+        return processed

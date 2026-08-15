@@ -1,23 +1,47 @@
+"""
+main.py — FastAPI Application
+==============================
+Serves the Corporate Fraud Detection API.
+
+On startup, the multi-source graph is built from the 4 CSV files
+(no database required), baseline statistics are computed from ground_truth.csv,
+Louvain community detection runs, and results are cached in memory.
+
+All responses include the 'explanations' field from the scoring engine.
+"""
+
 import os
 import sys
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 
-# Add root folder to sys.path
-sys.path.append(r"f:\SIH")
+# Add project root to sys.path
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
-from backend.app.database import get_db, SessionLocal
-from backend.app.models.models import Company, DirectorRelationship
-from backend.app.services.graph_service import GraphService
-from backend.app.scoring.score_engine import ScoreEngine
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+
+import pandas as pd
+import networkx as nx
+import networkx.algorithms.community as nx_comm
+
+from backend.app.services.graph_service import MultiSourceGraphBuilder
+from backend.app.scoring.score_engine import (
+    ScoreEngine,
+    calculate_baseline_stats,
+    compute_cluster_score,
+)
 from backend.app.services.community_service import CommunityService
 
 app = FastAPI(
     title="MCA21 Corporate Fraud & Shell Company Detection System API",
-    description="Proactive corporate network screening API for smart regulatory analytics.",
-    version="1.0.0"
+    description=(
+        "Multi-source graph-based corporate network screening API. "
+        "Detects fraud rings, shell company clusters, and wilful defaulter networks."
+    ),
+    version="2.0.0",
 )
 
 # Enable CORS for React frontend connection
@@ -29,278 +53,268 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global in-memory cache for graph data and engines to ensure sub-second response times
-G_SERVICE = None
-COMBINED_GRAPH = None
-SCORE_ENGINE = None
-CLUSTERS = None
+# ---------------------------------------------------------------------------
+# Global in-memory cache (populated at startup)
+# ---------------------------------------------------------------------------
+G_BUILDER: MultiSourceGraphBuilder = None
+COMBINED_GRAPH: nx.Graph = None
+SCORE_ENGINE: ScoreEngine = None
+CLUSTERS: List[Dict[str, Any]] = None
+GT_MAP: Dict[str, str] = {}   # {CIN: label}
 
-def get_background_graph():
-    db = SessionLocal()
-    try:
-        service = GraphService(db)
-        companies = db.query(Company).filter(~Company.cin.like("SYN_C%")).all()
-        comp_cins = set(c.cin for c in companies)
-        service.build_graph()
-        
-        nodes_to_remove = []
-        for node, data in service.graph.nodes(data=True):
-            ntype = data.get("type")
-            if ntype == "company" and node not in comp_cins:
-                nodes_to_remove.append(node)
-            elif ntype == "director" and str(node).startswith("SYN_D"):
-                nodes_to_remove.append(node)
-            elif ntype == "address" and str(node).startswith("SYN_ADDR"):
-                nodes_to_remove.append(node)
-                
-        service.graph.remove_nodes_from(nodes_to_remove)
-        return service.graph
-    finally:
-        db.close()
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
 
 @app.on_event("startup")
 def startup_event():
-    """
-    Initialize and cache graph structures and metrics on server boot.
-    """
-    global G_SERVICE, COMBINED_GRAPH, SCORE_ENGINE, CLUSTERS
-    print("FastAPI: Loading data models and initializing relationship graph...")
-    
-    # 1. Build background graph to calculate/freeze stats
-    bg_graph = get_background_graph()
-    SCORE_ENGINE = ScoreEngine(background_graph=bg_graph)
-    
-    # 2. Build full combined graph
-    G_SERVICE = GraphService()
-    COMBINED_GRAPH = G_SERVICE.build_graph()
-    
-    # 3. Detect and rank communities
+    global G_BUILDER, COMBINED_GRAPH, SCORE_ENGINE, CLUSTERS, GT_MAP
+
+    print("FastAPI startup: Building multi-source graph from CSVs...")
+
+    # 1. Build full graph
+    G_BUILDER = MultiSourceGraphBuilder(data_dir=DATA_DIR)
+    COMBINED_GRAPH = G_BUILDER.build_graph()
+
+    # 2. Load ground truth → extract normal CINs → compute baseline stats
+    gt_path = os.path.join(DATA_DIR, "ground_truth.csv")
+    gt_df   = pd.read_csv(gt_path, dtype={"CIN": str})
+    GT_MAP  = dict(zip(gt_df["CIN"].str.strip(), gt_df["label"].str.strip()))
+    normal_cins = {cin for cin, lbl in GT_MAP.items() if lbl == "normal"}
+
+    baseline_stats = calculate_baseline_stats(COMBINED_GRAPH, normal_cins)
+    SCORE_ENGINE = ScoreEngine(background_graph=COMBINED_GRAPH, normal_cins=normal_cins)
+
+    # 3. Community detection + scoring
     comm_service = CommunityService(COMBINED_GRAPH, SCORE_ENGINE)
     CLUSTERS = comm_service.detect_communities()
-    print("FastAPI: Graph engines successfully initialized.")
+
+    print(f"FastAPI startup complete. {len(CLUSTERS)} communities scored and cached.")
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "healthy", "database": "connected"}
+    return {
+        "status": "healthy",
+        "graph_loaded": COMBINED_GRAPH is not None,
+        "clusters_ready": CLUSTERS is not None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dashboard summary
+# ---------------------------------------------------------------------------
 
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary():
-    """
-    Returns high-level statistics for the dashboard.
-    """
     if COMBINED_GRAPH is None or CLUSTERS is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
-        
-    num_companies = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "company")
-    num_directors = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "director")
-    num_addresses = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "address")
-    
-    high_risk_clusters = sum(1 for c in CLUSTERS if c["cluster_risk_score"] >= 75.0)
-    
+
+    num_companies = sum(1 for _, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "company")
+    num_directors = sum(1 for _, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "director")
+    num_addresses = sum(1 for _, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "address")
+    num_lenders   = sum(1 for _, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "lender")
+    num_defaulters= sum(
+        1 for _, d in COMBINED_GRAPH.nodes(data=True)
+        if d.get("type") == "company" and d.get("wilful_defaulter_flag")
+    )
+
+    high_risk   = sum(1 for c in CLUSTERS if c["risk_score"] >= 60)
+    medium_risk = sum(1 for c in CLUSTERS if 35 <= c["risk_score"] < 60)
+
     return {
-        "total_companies": num_companies,
-        "total_directors": num_directors,
-        "total_addresses": num_addresses,
-        "total_clusters": len(CLUSTERS),
-        "high_risk_clusters_count": high_risk_clusters
+        "total_companies":        num_companies,
+        "total_directors":        num_directors,
+        "total_addresses":        num_addresses,
+        "total_lenders":          num_lenders,
+        "total_wilful_defaulters": num_defaulters,
+        "total_clusters":         len(CLUSTERS),
+        "high_risk_clusters":     high_risk,
+        "medium_risk_clusters":   medium_risk,
     }
+
+
+# ---------------------------------------------------------------------------
+# Cluster listing
+# ---------------------------------------------------------------------------
 
 @app.get("/api/clusters")
 def get_all_clusters():
-    """
-    Returns the ranked list of clusters.
-    """
     if CLUSTERS is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
-        
-    # Return brief info (excluding full list of nodes) for listing
-    summary_clusters = []
-    for idx, c in enumerate(CLUSTERS):
-        summary_clusters.append({
-            "rank": idx + 1,
-            "cluster_id": c["cluster_id"],
-            "cluster_name": c.get("cluster_name", f"Cluster {c['cluster_id']}"),
-            "company_names": c.get("company_names", []),
-            "companies_count": c["companies_count"],
-            "directors_count": c["directors_count"],
-            "addresses_count": c["addresses_count"],
-            "average_company_risk": c["average_company_risk"],
+
+    return [
+        {
+            "rank":             idx + 1,
+            "cluster_id":       c["cluster_id"],
+            "cluster_name":     c.get("cluster_name", f"Cluster {c['cluster_id']}"),
+            "risk_score":       c["risk_score"],
+            "risk_level":       c["risk_level"],
+            "explanations":     c["explanations"],
+            "company_names":    c.get("company_names", []),
+            "companies_count":  c["companies_count"],
+            "directors_count":  c["directors_count"],
+            "addresses_count":  c["addresses_count"],
+            "lenders_count":    c.get("lenders_count", 0),
             "date_spread_days": c["date_spread_days"],
-            "network_density": c["network_density"],
-            "cluster_risk_score": c["cluster_risk_score"]
-        })
-    return summary_clusters
+            "network_density":  c["network_density"],
+            "metrics":          c["metrics"],
+        }
+        for idx, c in enumerate(CLUSTERS)
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Cluster detail
+# ---------------------------------------------------------------------------
 
 @app.get("/api/clusters/{cluster_id}")
 def get_cluster_detail(cluster_id: int):
-    """
-    Returns full detail of a specific cluster.
-    """
     if CLUSTERS is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
-        
+
     for c in CLUSTERS:
         if c["cluster_id"] == cluster_id:
-            # We enrich companies details
             company_details = []
-            for cin in c["companies"]:
-                res = SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)
+            for cin in c["company_cins"]:
+                node_data = COMBINED_GRAPH.nodes.get(cin, {})
+                gt_label  = GT_MAP.get(cin, "unknown")
                 company_details.append({
-                    "cin": cin,
-                    "name": res["name"],
-                    "scores": res["scores"],
-                    "incorporation_date": COMBINED_GRAPH.nodes[cin].get("incorporation_date"),
-                    "filing_status": res["raw_signals"]["filing_status"],
-                    "paidup_capital": res["raw_signals"]["paidup_capital"]
+                    "cin":                  cin,
+                    "name":                 node_data.get("name", ""),
+                    "city":                 node_data.get("city", ""),
+                    "state":                node_data.get("state", ""),
+                    "incorporation_date":   node_data.get("incorporation_date", ""),
+                    "company_status":       node_data.get("company_status", ""),
+                    "authorized_capital":   node_data.get("authorized_capital", 0.0),
+                    "paidup_capital":       node_data.get("paidup_capital", 0.0),
+                    "wilful_defaulter":     node_data.get("wilful_defaulter_flag", False),
+                    "ground_truth_label":   gt_label,
                 })
-            
+
             return {
-                **c,
-                "companies_detailed": company_details
+                **{k: v for k, v in c.items() if k not in ("companies", "directors", "addresses")},
+                "companies_detailed": company_details,
             }
-            
+
     raise HTTPException(status_code=404, detail="Cluster not found")
+
+
+# ---------------------------------------------------------------------------
+# Cluster subgraph (Cytoscape JSON)
+# ---------------------------------------------------------------------------
 
 @app.get("/api/clusters/{cluster_id}/graph")
 def get_cluster_graph(cluster_id: int):
-    """
-    Returns Cytoscape JSON for rendering a specific cluster's network.
-    """
-    if CLUSTERS is None or G_SERVICE is None:
+    if CLUSTERS is None or G_BUILDER is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
-        
+
     for c in CLUSTERS:
         if c["cluster_id"] == cluster_id:
-            # Collect all nodes in this cluster
-            all_nodes = c["companies"] + c["directors"] + c["addresses"]
-            
-            # Extract subgraph from combined graph
-            subg = G_SERVICE.get_subgraph_for_nodes(all_nodes)
-            
-            # Convert to Cytoscape JSON
-            return G_SERVICE.to_cytoscape_json(subg)
-            
+            all_nodes = (
+                c.get("company_cins", [])
+                + c.get("directors", [])
+                + c.get("addresses", [])
+                + c.get("lenders", [])
+            )
+            subg = G_BUILDER.get_subgraph_for_nodes(all_nodes)
+            return G_BUILDER.to_cytoscape_json(subg)
+
     raise HTTPException(status_code=404, detail="Cluster not found")
+
+
+# ---------------------------------------------------------------------------
+# Company evidence trail
+# ---------------------------------------------------------------------------
 
 @app.get("/api/companies/{cin}/evidence")
 def get_company_evidence(cin: str):
-    """
-    Returns evidence logs for an anomalous company.
-    """
     if COMBINED_GRAPH is None or SCORE_ENGINE is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
-        
+
     if not COMBINED_GRAPH.has_node(cin):
-        raise HTTPException(status_code=404, detail="Company not found")
-        
+        raise HTTPException(status_code=404, detail="Company not found in graph")
+
     res = SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)
-    
-    # Generate structured human-readable logs
-    logs = []
-    
-    # 1. Address
-    deg_addr = res["raw_signals"]["address_degree"]
-    if res["scores"]["address_risk"] > 0:
-        logs.append(f"High-density address sharing detected: {deg_addr} companies share this registered office (Risk Score: {res['scores']['address_risk']:.1f}/100).")
-    else:
-        logs.append(f"Normal address distribution: {deg_addr} company registered at this location.")
-        
-    # 2. Directors
-    deg_dir = res["raw_signals"]["max_director_degree"]
-    if res["scores"]["director_risk"] > 0:
-        logs.append(f"Unusual director centralisation: One or more directors hold boards across {deg_dir} companies, exceeding background parameters (Risk Score: {res['scores']['director_risk']:.1f}/100).")
-    else:
-        logs.append(f"Normal director affiliations: Directors hold boards across {deg_dir} active company/companies.")
-        
-    # 3. Burst
-    burst = res["raw_signals"]["burst_company_count"]
-    if res["scores"]["temporal_risk"] > 0:
-        logs.append(f"Temporal anomaly: Coordinated incorporation burst of {burst} related companies registered within a 30-day window (Risk Score: {res['scores']['temporal_risk']:.1f}/100).")
-    else:
-        logs.append("Normal incorporation schedule: No burst/batch registrations detected within date windows.")
-        
-    # 4. Capital/Filing
-    if res["scores"]["capital_filing_risk"] > 0:
-        log_cf = "Compliance mismatches: "
-        sub_flags = []
-        if res["raw_signals"]["is_zero_paidup"]:
-            sub_flags.append("declared paid-up capital is zero")
-        if res["raw_signals"]["is_defaulter"]:
-            sub_flags.append("company is in active filing default / nil return status")
-        log_cf += " and ".join(sub_flags) + f" (Risk Score: {res['scores']['capital_filing_risk']:.1f}/100)."
-        logs.append(log_cf)
-    else:
-        logs.append("Good compliance profile: Paid-up capital is active and filings are up-to-date.")
-        
+    gt_label = GT_MAP.get(cin, "unknown")
+
     return {
-        "cin": cin,
-        "name": res["name"],
-        "composite_score": res["scores"]["composite_score"],
+        "cin":              cin,
+        "name":             res["name"],
+        "ground_truth":     gt_label,
+        "composite_score":  res["scores"]["composite_score"],
         "individual_scores": res["scores"],
-        "raw_signals": res["raw_signals"],
-        "evidence_trail": logs
+        "raw_signals":      res["raw_signals"],
+        "explanations":     res["explanations"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Evaluation metrics (cross-referenced against ground_truth.csv labels)
+# ---------------------------------------------------------------------------
 
 @app.get("/api/evaluation")
 def get_evaluation_metrics():
-    """
-    Computes and returns pipeline evaluation metrics.
-    """
-    if CLUSTERS is None or COMBINED_GRAPH is None or SCORE_ENGINE is None:
+    if CLUSTERS is None or COMBINED_GRAPH is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
-        
-    # Find the cluster containing the synthetic companies
-    planted_cluster = None
-    planted_rank = -1
-    for idx, c in enumerate(CLUSTERS):
-        syn_members = [cin for cin in c["companies"] if cin.startswith("SYN_C")]
-        if len(syn_members) > 0:
-            planted_cluster = c
-            planted_rank = idx + 1
-            break
-            
-    detected_planted = 0
-    if planted_cluster:
-        detected_planted = len([cin for cin in planted_cluster["companies"] if cin.startswith("SYN_C")])
-        
-    # False positives on background (score >= 75)
-    false_positives = 0
-    for node, data in COMBINED_GRAPH.nodes(data=True):
-        if data.get("type") == "company" and not node.startswith("SYN_C"):
-            res = SCORE_ENGINE.compute_scores(node, COMBINED_GRAPH)
-            if res["scores"]["composite_score"] >= 75.0:
-                false_positives += 1
-                
-    detection_rate = (detected_planted / 10) * 100.0
-    false_positive_rate = (false_positives / 1000) * 100.0
-    
-    # Legitimate Edge Case results
-    ca_office_cluster_rank = -1
-    tata_holding_cluster_rank = -1
-    
-    for idx, c in enumerate(CLUSTERS):
-        is_ca = any("MERLIN CHAMBERS" in COMBINED_GRAPH.nodes[list(COMBINED_GRAPH.neighbors(cin))[0]].get("raw_address", "") 
-                    for cin in c["companies"] if not cin.startswith("SYN_C"))
-        if is_ca and ca_office_cluster_rank == -1:
-            ca_office_cluster_rank = idx + 1
-            
-        is_tata = any("TATA STEEL" in COMBINED_GRAPH.nodes[cin].get("name", "") for cin in c["companies"])
-        if is_tata and tata_holding_cluster_rank == -1:
-            tata_holding_cluster_rank = idx + 1
-            
-    status = "PASS" if (detection_rate == 100.0 and planted_rank == 1 and false_positive_rate < 2.0) else "FAIL"
-    
+
+    def find_cluster_for_label(label: str):
+        target_cins = {cin for cin, lbl in GT_MAP.items() if lbl == label}
+        best_rank, best_cluster, best_overlap = -1, None, 0
+        for rank, c in enumerate(CLUSTERS, start=1):
+            overlap = len(set(c["company_cins"]) & target_cins)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_rank = rank
+                best_cluster = c
+        return best_rank, best_cluster, best_overlap
+
+    ra_rank, ra_cluster, ra_overlap = find_cluster_for_label("fraud_ring_A")
+    rb_rank, rb_cluster, rb_overlap = find_cluster_for_label("fraud_ring_B")
+    rc_rank, rc_cluster, rc_overlap = find_cluster_for_label("fraud_ring_C")
+    le_rank, le_cluster, le_overlap = find_cluster_for_label("legit_edge_case")
+
+    ring_scores = [
+        ra_cluster["risk_score"] if ra_cluster else 0,
+        rb_cluster["risk_score"] if rb_cluster else 0,
+        rc_cluster["risk_score"] if rc_cluster else 0,
+    ]
+    legit_score = le_cluster["risk_score"] if le_cluster else 0
+    legit_lower = all(legit_score < rs for rs in ring_scores if rs > 0)
+
     return {
-        "real_companies": 1000,
-        "synthetic_fraud_companies": 10,
-        "total_clusters": len(CLUSTERS),
-        "planted_cluster_rank": planted_rank,
-        "detected_planted_entities": detected_planted,
-        "total_planted_entities": 10,
-        "detection_rate_pct": detection_rate,
-        "false_positive_count": false_positives,
-        "false_positive_rate_pct": false_positive_rate,
-        "ca_office_cluster_rank": ca_office_cluster_rank,
-        "tata_holding_cluster_rank": tata_holding_cluster_rank,
-        "status": status
+        "total_clusters":       len(CLUSTERS),
+        "fraud_ring_A": {
+            "rank":         ra_rank,
+            "risk_score":   ra_cluster["risk_score"] if ra_cluster else None,
+            "risk_level":   ra_cluster["risk_level"] if ra_cluster else None,
+            "overlap":      ra_overlap,
+            "explanations": ra_cluster["explanations"] if ra_cluster else [],
+        },
+        "fraud_ring_B": {
+            "rank":         rb_rank,
+            "risk_score":   rb_cluster["risk_score"] if rb_cluster else None,
+            "risk_level":   rb_cluster["risk_level"] if rb_cluster else None,
+            "overlap":      rb_overlap,
+            "explanations": rb_cluster["explanations"] if rb_cluster else [],
+        },
+        "fraud_ring_C": {
+            "rank":         rc_rank,
+            "risk_score":   rc_cluster["risk_score"] if rc_cluster else None,
+            "risk_level":   rc_cluster["risk_level"] if rc_cluster else None,
+            "overlap":      rc_overlap,
+            "explanations": rc_cluster["explanations"] if rc_cluster else [],
+        },
+        "legit_edge_case": {
+            "rank":         le_rank,
+            "risk_score":   legit_score,
+            "risk_level":   le_cluster["risk_level"] if le_cluster else None,
+            "overlap":      le_overlap,
+            "lower_than_rings": legit_lower,
+        },
     }

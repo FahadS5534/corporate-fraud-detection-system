@@ -1,0 +1,30 @@
+{
+  "mca_companies": {
+    "total": 467,
+    "missing_cin": 0,
+    "missing_name": 0,
+    "missing_address": 0,
+    "duplicate_cins": 0,
+    "invalid_dates": 0,
+    "issues": []
+  },
+  "mca_directors": {
+    "total": 608,
+    "missing_din": 0,
+    "missing_cin": 0,
+    "orphaned_cins": 0,
+    "duplicate_links": 0,
+    "issues": []
+  },
+  "cersai_security_interests": {
+    "total": 116,
+    "missing_cin": 0,
+    "missing_lender": 0,
+    "orphaned_cins": 0
+  },
+  "rbi_wilful_defaulters": {
+    "total": 14,
+    "missing_cin": 0,
+    "orphaned_cins": 0
+  }
+}
