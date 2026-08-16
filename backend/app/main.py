@@ -22,7 +22,9 @@ from backend.app.scoring.score_engine import ScoreEngine
 from backend.app.services.community_service import CommunityService
 
 # Ensure static folder exists
-os.makedirs("backend/static", exist_ok=True)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+os.makedirs(STATIC_DIR, exist_ok=True)
 
 app = FastAPI(
     title="MCA21 Corporate Fraud & Shell Company Detection System API",
@@ -40,7 +42,7 @@ app.add_middleware(
 )
 
 # Mount pre-rendered Pyvis graph folder
-app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # Global in-memory cache
 G_SERVICE = None

@@ -13,11 +13,29 @@ def build_interactive_html():
     service = GraphService()
     graph = service.build_graph()
     
+    # Identify high-risk companies (and edge cases) and their connected neighbors to declutter graph
+    high_risk_companies = set()
+    for node_id, data in graph.nodes(data=True):
+        if data.get("type") == "company":
+            label = data.get("ground_truth_label", "normal")
+            is_defaulter = data.get("wilful_defaulter_flag", False)
+            if "fraud_ring" in label or is_defaulter or label == "legit_edge_case":
+                high_risk_companies.add(node_id)
+                
+    nodes_to_keep = set(high_risk_companies)
+    for u, v in graph.edges():
+        if u in high_risk_companies:
+            nodes_to_keep.add(v)
+        if v in high_risk_companies:
+            nodes_to_keep.add(u)
+
     nodes = []
     edges = []
     
     # Node formatting
     for node_id, data in graph.nodes(data=True):
+        if node_id not in nodes_to_keep:
+            continue
         ntype = data.get("type", "unknown")
         name = data.get("name", node_id)
         
@@ -35,7 +53,7 @@ def build_interactive_html():
                 size = 25
                 title = f"<b>Company: {name}</b><br/>CIN: {node_id}<br/>Status: {data.get('status')}<br/>Shared Registered Agent Hub"
             else:
-                color = "#3B82F6"  # Blue for normal company
+                color = "#3B82F6"  # Blue for normal company (connected to high risk)
                 size = 20
                 title = f"<b>Company: {name}</b><br/>CIN: {node_id}<br/>Status: {data.get('status')}"
         elif ntype == "director":
@@ -66,6 +84,8 @@ def build_interactive_html():
         })
         
     for u, v, data in graph.edges(data=True):
+        if u not in nodes_to_keep or v not in nodes_to_keep:
+            continue
         relation = data.get("relation", "LINKED")
         edges.append({
             "from": u,
@@ -141,14 +161,14 @@ def build_interactive_html():
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
         }}
         .control-panel input {{
-            width: 93%;
+            width: 100%;
             padding: 10px;
             border-radius: 6px;
             border: 1px solid rgba(255, 255, 255, 0.15);
             background: rgba(30, 41, 59, 0.5);
             color: #F8FAFC;
-            margin-bottom: 12px;
             font-size: 0.85rem;
+            box-sizing: border-box;
         }}
         .control-panel input:focus {{
             outline: none;
@@ -217,7 +237,15 @@ def build_interactive_html():
     </div>
     
     <div class="overlay control-panel">
-        <input type="text" id="search" placeholder="Search Company or Director..." oninput="searchNode()">
+        <div style="display: flex; gap: 6px; margin-bottom: 12px;">
+            <input list="node-options" id="search" placeholder="Search Company or Director..." onchange="searchNode()" style="flex: 1; min-width: 0;">
+            <datalist id="node-options"></datalist>
+            <button onclick="toggleFullscreen()" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 6px; color: white; padding: 0 10px; cursor: pointer; font-size: 0.95rem; font-weight: bold;" title="Toggle Fullscreen">⛶</button>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: rgba(0, 0, 0, 0.2); padding: 6px 10px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.05);">
+            <span style="font-size: 0.75rem; color: #94A3B8; font-weight: 600;">Physics Layout</span>
+            <button id="physicsToggle" onclick="togglePhysics()" style="background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 4px; color: #F8FAFC; padding: 3px 8px; cursor: pointer; font-size: 0.7rem; font-weight: 700; transition: all 0.2s;">Disabled (Static)</button>
+        </div>
         <div class="legend">
             <div class="legend-item">
                 <div class="legend-dot" style="background-color: #EF4444;"></div>
@@ -255,6 +283,20 @@ def build_interactive_html():
         var rawNodes = {nodes_json};
         var rawEdges = {edges_json};
         
+        // Convert string titles to rich HTML tooltips
+        rawNodes.forEach(function(n) {{
+            if (n.title && typeof n.title === 'string') {{
+                var el = document.createElement('div');
+                el.style.fontFamily = 'Inter, sans-serif';
+                el.style.fontSize = '11px';
+                el.style.color = '#F8FAFC';
+                el.style.lineHeight = '1.4';
+                el.style.padding = '4px 8px';
+                el.innerHTML = n.title;
+                n.title = el;
+            }}
+        }});
+        
         var container = document.getElementById('network');
         var data = {{
             nodes: new vis.DataSet(rawNodes),
@@ -286,16 +328,19 @@ def build_interactive_html():
                 }}
             }},
             physics: {{
-                solver: 'forceAtlas2Based',
-                forceAtlas2Based: {{
-                    gravitationalConstant: -35,
-                    centralGravity: 0.015,
-                    springLength: 70,
-                    springConstant: 0.08
+                solver: 'barnesHut',
+                barnesHut: {{
+                    gravitationalConstant: -2000,
+                    centralGravity: 0.3,
+                    springLength: 95,
+                    springConstant: 0.04,
+                    damping: 0.09,
+                    avoidOverlap: 0.5
                 }},
                 stabilization: {{
-                    iterations: 150,
-                    updateInterval: 25
+                    enabled: true,
+                    iterations: 50,
+                    updateInterval: 10
                 }}
             }},
             groups: {{
@@ -355,13 +400,64 @@ def build_interactive_html():
             propertiesList.appendChild(row);
         }}
         
+        var physicsEnabled = false;
+
+        network.once("stabilizationIterationsDone", function () {{
+            network.setOptions({{ physics: false }});
+            physicsEnabled = false;
+            document.getElementById("physicsToggle").innerText = "Disabled (Static)";
+            document.getElementById("physicsToggle").style.background = "rgba(255, 255, 255, 0.1)";
+        }});
+
+        function togglePhysics() {{
+            physicsEnabled = !physicsEnabled;
+            network.setOptions({{ physics: physicsEnabled }});
+            var btn = document.getElementById("physicsToggle");
+            if (physicsEnabled) {{
+                btn.innerText = "Enabled (Active)";
+                btn.style.background = "#10B981";
+                btn.style.borderColor = "#10B981";
+            }} else {{
+                btn.innerText = "Disabled (Static)";
+                btn.style.background = "rgba(255, 255, 255, 0.1)";
+                btn.style.borderColor = "rgba(255, 255, 255, 0.2)";
+            }}
+        }}
+
+        function toggleFullscreen() {{
+            if (!document.fullscreenElement) {{
+                document.documentElement.requestFullscreen().catch(function(err) {{
+                    console.error("Error attempting to enable fullscreen:", err);
+                }});
+            }} else {{
+                document.exitFullscreen();
+            }}
+        }}
+
+        // Populate search Suggestions Dropdown (Datalist)
+        var datalist = document.getElementById('node-options');
+        rawNodes.forEach(function(n) {{
+            if (n.group === 'company' || n.group === 'director') {{
+                var option = document.createElement('option');
+                option.value = n.label;
+                datalist.appendChild(option);
+            }}
+        }});
+
         function searchNode() {{
-            var query = document.getElementById('search').value.toLowerCase();
-            if (!query) return;
+            var val = document.getElementById('search').value;
+            if (!val) return;
             
             var matched = rawNodes.find(function(n) {{
-                return n.label.toLowerCase().includes(query) || n.id.toLowerCase().includes(query);
+                return n.label.toLowerCase() === val.toLowerCase() || n.id.toLowerCase() === val.toLowerCase();
             }});
+            
+            // Fallback to partial match if exact match not found
+            if (!matched) {{
+                matched = rawNodes.find(function(n) {{
+                    return n.label.toLowerCase().includes(val.toLowerCase()) || n.id.toLowerCase().includes(val.toLowerCase());
+                }});
+            }}
             
             if (matched) {{
                 network.focus(matched.id, {{
@@ -372,7 +468,6 @@ def build_interactive_html():
                     }}
                 }});
                 network.selectNodes([matched.id]);
-                // Trigger detail panel manually
                 nodeName.innerText = matched.label;
                 propertiesList.innerHTML = '';
                 addProperty("ID / Registration", matched.id);

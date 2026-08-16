@@ -936,7 +936,25 @@ export default function App() {
                 )}
 
                 {viewMode === 'pyvis' && (
-                  <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wide bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">VisJS Force Simulation</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wide bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">VisJS Force Simulation</span>
+                    <button
+                      onClick={() => {
+                        const iframe = document.querySelector('iframe[title="Interactive Corporate Network Graph"]');
+                        if (iframe) {
+                          if (iframe.requestFullscreen) {
+                            iframe.requestFullscreen();
+                          } else if ((iframe as any).webkitRequestFullscreen) {
+                            (iframe as any).webkitRequestFullscreen();
+                          }
+                        }
+                      }}
+                      className="p-1 rounded bg-white border border-slate-200 text-slate-600 hover:text-slate-900 transition-all hover:bg-slate-50 shadow-xs flex items-center justify-center"
+                      title="Make Graph Fullscreen"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 )}
                 {viewMode === 'map' && (
                   <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wide bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">Geographic Mapping</span>
