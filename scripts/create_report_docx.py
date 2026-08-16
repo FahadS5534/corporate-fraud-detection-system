@@ -249,6 +249,62 @@ def create_report():
     add_bullet_point("The target rings (Rings A, B, and C) ranked #1, #2, and #3 respectively in the cluster risk registry.", bold_prefix="Fraud Ring Ranks: Top 3 ")
     add_bullet_point("The 7 legitimate companies sharing a common office address were successfully scored as low-risk (ranking #6) and segregated from the active fraud syndicates.", bold_prefix="Legitimate Hub Segregation: ")
 
+    # --- Section 5 ---
+    add_custom_heading("5. Frontend-to-Backend Data Integration Map", level=1)
+    add_body_paragraph(
+        "For the presentation panel, understanding how the user interface maps to the underlying FastAPI "
+        "endpoints and database structures is critical. Below is the mapping of all frontend components to their "
+        "respective backend services:"
+    )
+    add_bullet_point("Mapped to '/api/dashboard/summary'. Displays total metrics such as the 1,007 loaded companies, "
+                     "2,313 director edges, and active investigations. Under the hood, this performs quick SQL aggregate queries "
+                     "(`SELECT count(*) FROM companies`).", bold_prefix="Dashboard Summary Cards: ")
+    add_bullet_point("Mapped to '/api/clusters'. It aggregates communities identified by the Louvain clustering and groups "
+                     "them into high risk (composite >= 75), medium risk (30-74), and low risk (<30).", bold_prefix="Cluster Risk Modularity Donut Chart: ")
+    add_bullet_point("Mapped to the dynamic list of high-risk clusters returned by '/api/clusters' sorted by "
+                     "`cluster_risk_score` in descending order. Selecting a row pulls detailed community info via `/api/clusters/{id}`.", bold_prefix="Risk Rankings Table: ")
+    add_bullet_point("Mapped to `/api/clusters/{id}/graph` which generates the JSON formatted graph structure (nodes and edges) "
+                     "containing companies, directors, and lenders in that specific community. By requesting subgraphs dynamically, "
+                     "the frontend stays responsive instead of trying to render all 3,789 nodes.", bold_prefix="Interactive Cytoscape workspace: ")
+    add_bullet_point("Mapped to `/backend/static/pyvis_graph.html`, pre-rendered by `scripts/build_pyvis_graph.py` to show "
+                     "the global cluster visualization using a physics-driven layout in a static iframe.", bold_prefix="Global Network Visualization (Pyvis): ")
+
+    # --- Section 6 ---
+    add_custom_heading("6. Technical Q&A & Defense Sheet (Jury Q&A)", level=1)
+    
+    add_custom_heading("Q1: How does the model distinguish between a genuine CA firm hosting 100+ clients and an actual shell company address hub?", level=3)
+    add_body_paragraph(
+        "A: The scoring engine uses a weighted composite average. While both will have a high Address Centrality Risk (S_addr = 100), "
+        "a genuine CA firm's hosted companies will have clean profiles: their directors won't board multiple other clients (Director Degree = 0), "
+        "incorporations will be staggered over years (Burst Risk = 0), they will have active MCA filings (Filing Risk = 0), and they won't share "
+        "loan charge patterns or defaults (Lender/Defaulter Risk = 0). As a result, the CA firm's clients will score only "
+        "around 25/100, while the shell ring companies will score >= 75/100."
+    )
+    
+    add_custom_heading("Q2: How does the system scale to handle millions of companies registered under the MCA registry?", level=3)
+    add_body_paragraph(
+        "A: The system uses a frozen-baseline architecture. Z-score parameters are computed once on normal background "
+        "data. When new companies are added, their risk scores are calculated in O(1) time by comparing their raw metrics directly against "
+        "these frozen parameters, rather than recalculating the entire graph statistics. Community detection (Louvain) is run "
+        "as an asynchronous batch job (e.g. nightly) to update cluster divisions, ensuring no real-time performance bottleneck on the API server."
+    )
+
+    add_custom_heading("Q3: What database schema supports these network connections?", level=3)
+    add_body_paragraph(
+        "A: The backend uses a relational SQLite database (SQLAlchemy ORM) containing six key tables: "
+        "(1) 'companies' storing CIN, paid-up capital, and MCA status; (2) 'directors' storing DIN and name; "
+        "(3) 'company_directors' linking directors to companies; (4) 'addresses' mapping registration coordinates; "
+        "(5) 'loans' tracking active CERSAI borrowing registrations; and (6) 'defaulters' tracking RBI wilful default records."
+    )
+
+    add_custom_heading("Q4: Why was the Louvain algorithm chosen over other community algorithms like K-Means or Infomap?", level=3)
+    add_body_paragraph(
+        "A: K-Means is a distance-based clustering algorithm requiring a vector space, which is not suitable for complex graph topologies "
+        "with multiple relationship types (directors, addresses, lenders). Louvain is specifically designed for complex network graphs. "
+        "It optimizes Modularity directly, which is ideal for finding cohesive communities where the number of clusters is unknown beforehand. "
+        "Infomap relies on flow dynamics (random walks), which is less effective than Modularity when identifying resource-sharing groups like shell rings."
+    )
+
     # Save document
     output_path = r"f:\SIH\document\Scoring_and_Louvain_Explainer.docx"
     doc.save(output_path)
