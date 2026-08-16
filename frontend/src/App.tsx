@@ -1,26 +1,26 @@
 import { useState, useEffect, useRef } from 'react';
 import cytoscape from 'cytoscape';
-import { 
-  ShieldAlert, 
-  Activity, 
-  Users, 
-  MapPin, 
-  FolderGit2, 
-  Search, 
-  Eye, 
-  CheckCircle2, 
-  RefreshCw, 
-  Network, 
+import {
+  ShieldAlert,
+  Activity,
+  Users,
+  MapPin,
+  FolderGit2,
+  Search,
+  Eye,
+  CheckCircle2,
+  RefreshCw,
+  Network,
   Maximize2,
   TrendingUp,
   BookOpen,
   Scale
 } from 'lucide-react';
-import { 
-  AreaChart, 
-  Area, 
-  CartesianGrid, 
-  Tooltip, 
+import {
+  AreaChart,
+  Area,
+  CartesianGrid,
+  Tooltip,
   ResponsiveContainer,
   PieChart,
   Pie,
@@ -123,11 +123,11 @@ export default function App() {
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
   const [evidence, setEvidence] = useState<EvidenceData | null>(null);
   const [graphElements, setGraphElements] = useState<any>(null);
-  
+
   const [searchQuery, setSearchQuery] = useState('');
   const [layoutType, setLayoutType] = useState('cose');
   const [loading, setLoading] = useState(false);
-  
+
   const [viewMode, setViewMode] = useState<'graph' | 'map' | 'pyvis'>('pyvis');
   const cyRef = useRef<HTMLDivElement>(null);
   const cyInstance = useRef<any>(null);
@@ -161,7 +161,7 @@ export default function App() {
   useEffect(() => {
     if (activeTab === 'explorer' && viewMode === 'map' && graphElements) {
       const addressNodes = graphElements.filter((el: any) => el.data.type === 'address' && el.data.latitude && el.data.longitude);
-      
+
       if (addressNodes.length === 0) return;
 
       if (mapInstance.current) {
@@ -188,8 +188,8 @@ export default function App() {
 
       addressNodes.forEach((node: any) => {
         const { latitude, longitude, id, raw_address } = node.data;
-        
-        const connectedCompanies = graphElements.filter((el: any) => 
+
+        const connectedCompanies = graphElements.filter((el: any) =>
           el.data.source === id || el.data.target === id
         ).map((el: any) => {
           const otherId = el.data.source === id ? el.data.target : el.data.source;
@@ -199,7 +199,7 @@ export default function App() {
 
         const count = connectedCompanies.length;
         const color = count >= 3 ? '#DC2626' : count >= 2 ? '#D97706' : '#1E3B8A';
-        
+
         const customIcon = L.divIcon({
           html: `<div style="background-color: ${color}; border: 2px solid white; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">${count}</div>`,
           className: 'custom-map-marker',
@@ -263,7 +263,7 @@ export default function App() {
       setClusterDetail(data);
       setSelectedEntity(null);
       setEvidence(null);
-      
+
       const graphRes = await fetch(`${API_BASE}/api/clusters/${id}/graph`);
       const graphData = await graphRes.json();
       setGraphElements(graphData);
@@ -289,11 +289,11 @@ export default function App() {
   // Render Cytoscape.js Relationship Graph
   const initCytoscape = (elements: any) => {
     if (!cyRef.current) return;
-    
+
     if (cyInstance.current) {
       cyInstance.current.destroy();
     }
-    
+
     cyInstance.current = cytoscape({
       container: cyRef.current,
       elements: elements,
@@ -435,9 +435,9 @@ export default function App() {
     cyInstance.current.on('tap', 'node', (evt: any) => {
       const node = evt.target;
       const data = node.data();
-      
+
       setSelectedEntity(data);
-      
+
       if (data.type === 'company') {
         fetchEvidence(data.id);
       } else {
@@ -446,7 +446,7 @@ export default function App() {
 
       const cy = cyInstance.current;
       cy.elements().removeClass('highlighted').removeClass('dimmed');
-      
+
       const neighbors = node.neighborhood();
       cy.elements().difference(node.union(neighbors)).addClass('dimmed');
       node.addClass('highlighted');
@@ -484,13 +484,13 @@ export default function App() {
   const filteredClusters = clusters.filter(c => {
     const q = searchQuery.toLowerCase().trim();
     if (!q) return true;
-    
+
     const matchesId = c.cluster_id.toString().includes(q);
     const matchesName = c.cluster_name?.toLowerCase().includes(q);
     const matchesCompany = c.company_names?.some(name => name.toLowerCase().includes(q));
     const matchesRisk = Math.round(c.cluster_risk_score).toString().includes(q);
     const matchesCount = c.companies_count.toString().includes(q);
-    
+
     return matchesId || matchesName || matchesCompany || matchesRisk || matchesCount;
   });
 
@@ -500,7 +500,7 @@ export default function App() {
     if (score >= 75) range = 'Critical (>=75)';
     else if (score >= 50) range = 'High (50-74)';
     else if (score >= 30) range = 'Medium (30-49)';
-    
+
     const existing = acc.find(item => item.name === range);
     if (existing) {
       existing.value += 1;
@@ -514,55 +514,62 @@ export default function App() {
 
   return (
     <div className="flex-1 flex flex-col min-h-screen bg-slate-50 text-slate-800">
-      
+
       {/* Official Government Bilingual Banner */}
-      <div className="bg-slate-900 text-slate-300 py-1.5 px-6 text-[10px] font-medium flex items-center justify-between border-b border-slate-950 tracking-wide">
+      <div className="h-1 w-full flex">
+        <div className="h-full bg-[#FF9933] flex-1"></div>
+        <div className="h-full bg-white flex-1"></div>
+        <div className="h-full bg-[#138808] flex-1"></div>
+      </div>
+      <div className="bg-[#183a6b] text-slate-100 py-1.5 px-6 text-[10px] font-medium flex items-center justify-between border-b border-slate-900 tracking-wide">
         <div className="flex items-center space-x-4">
           <span>भारत सरकार • GOVERNMENT OF INDIA</span>
-          <span className="text-slate-500">|</span>
+          <span className="text-slate-400">|</span>
           <span>कॉर्पोरेट कार्य मंत्रालय • MINISTRY OF CORPORATE AFFAIRS</span>
         </div>
         <div className="flex items-center space-x-3">
-          <span>SFIO Restricted Workspace</span>
-          <span className="bg-red-900/60 text-red-300 border border-red-800/80 px-2 py-0.5 rounded-[4px] font-bold text-[9px]">SECURE SESSION</span>
+          <span className="opacity-90">SFIO Restricted Workspace</span>
+          <span className="bg-red-900/80 text-red-100 border border-red-700/80 px-2 py-0.5 rounded-[4px] font-bold text-[9px] shadow-sm tracking-wider">SECURE SESSION</span>
         </div>
       </div>
 
       {/* Official Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-xs">
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm">
         <div className="flex items-center space-x-4">
-          <div className="bg-slate-100 border border-slate-200 p-2.5 rounded-lg flex items-center justify-center text-slate-700">
-            <Scale className="w-6 h-6 text-slate-700" />
+          <div className="flex items-center justify-center">
+            <img src="/mca-logo-screenshot.png" alt="MCA Logo" className="h-20 sm:h-24 md:h-28 w-auto min-w-[200px] object-contain" onError={(e) => {
+              (e.target as HTMLImageElement).src = "https://upload.wikimedia.org/wikipedia/en/thumb/f/fa/Ministry_of_Corporate_Affairs.svg/120px-Ministry_of_Corporate_Affairs.svg.png";
+            }} />
           </div>
-          <div>
+          <div className="pl-2 border-l-2 border-slate-100">
             <div className="flex items-center space-x-2">
-              <h1 className="text-lg font-extrabold text-slate-900 tracking-tight font-serif">
+              <h1 className="text-xl font-extrabold text-[#183a6b] tracking-tight font-serif uppercase">
                 MCA21 Risk Intelligence Portal
               </h1>
-              <span className="text-slate-300 font-light">|</span>
-              <span className="text-xs font-bold text-slate-500 uppercase tracking-widest bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">MODULAR CLUSTERING</span>
+              <span className="text-slate-300 font-light hidden sm:inline">|</span>
+              <span className="text-xs font-bold text-slate-600 uppercase tracking-widest bg-slate-50 border border-slate-200 px-2 py-0.5 rounded shadow-sm">MODULAR CLUSTERING</span>
             </div>
-            <p className="text-[11px] text-slate-500 font-medium mt-0.5">Shell Syndicate Screening & Modularity Cluster Analytics Dashboard</p>
+            <p className="text-[11.5px] text-slate-500 font-medium mt-1">Shell Syndicate Screening & Modularity Cluster Analytics Dashboard</p>
           </div>
         </div>
 
         {/* Tab Navigation (Flat Government Style) */}
-        <nav className="flex space-x-1 bg-slate-100 p-1 rounded-lg border border-slate-200">
-          <button 
+        <nav className="flex space-x-1 bg-slate-100/80 p-1.5 rounded-lg border border-slate-200">
+          <button
             onClick={() => setActiveTab('overview')}
-            className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'overview' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'overview' ? 'bg-[#183a6b] text-white shadow-md' : 'text-slate-600 hover:bg-slate-200'}`}
           >
             <Activity className="w-3.5 h-3.5" /> Dashboard
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('rankings')}
-            className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'rankings' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'rankings' ? 'bg-[#183a6b] text-white shadow-md' : 'text-slate-600 hover:bg-slate-200'}`}
           >
             <TrendingUp className="w-3.5 h-3.5" /> Risk Rankings
           </button>
-          <button 
+          <button
             onClick={() => setActiveTab('explorer')}
-            className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'explorer' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-600 hover:text-slate-900'}`}
+            className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'explorer' ? 'bg-[#183a6b] text-white shadow-md' : 'text-slate-600 hover:bg-slate-200'}`}
           >
             <Network className="w-3.5 h-3.5" /> Network Workspace
           </button>
@@ -572,7 +579,7 @@ export default function App() {
 
       {/* Main Body */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full flex flex-col gap-6">
-        
+
         {/* TAB 1: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="flex flex-col gap-6 animate-fade-in">
@@ -641,8 +648,8 @@ export default function App() {
                     >
                       <defs>
                         <linearGradient id="colorRisk" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#1E3A8A" stopOpacity={0.2}/>
-                          <stop offset="95%" stopColor="#1E3A8A" stopOpacity={0}/>
+                          <stop offset="5%" stopColor="#1E3A8A" stopOpacity={0.2} />
+                          <stop offset="95%" stopColor="#1E3A8A" stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" />
@@ -670,7 +677,7 @@ export default function App() {
                         dataKey="value"
                       >
                         {riskDistributionData.map((_, index) => (
-                           <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                         ))}
                       </Pie>
                       <Tooltip contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: 8, fontSize: 11 }} />
@@ -729,7 +736,7 @@ export default function App() {
               </div>
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input 
+                <input
                   type="text"
                   placeholder="Search by Company or Cluster Name..."
                   value={searchQuery}
@@ -772,16 +779,15 @@ export default function App() {
                       <td>{(c.network_density * 100).toFixed(1)}%</td>
                       <td>{c.average_company_risk.toFixed(1)}</td>
                       <td>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                          c.cluster_risk_score >= 75 ? 'bg-red-50 text-red-700 border-red-200' :
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${c.cluster_risk_score >= 75 ? 'bg-red-50 text-red-700 border-red-200' :
                           c.cluster_risk_score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                          'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        }`}>
+                            'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}>
                           {c.cluster_risk_score.toFixed(1)}
                         </span>
                       </td>
                       <td>
-                        <button 
+                        <button
                           onClick={() => {
                             setSelectedClusterId(c.cluster_id);
                             setActiveTab('explorer');
@@ -812,7 +818,7 @@ export default function App() {
               <div className="border-b border-slate-100 pb-3">
                 <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Active Investigation Target</span>
                 <div className="mt-1.5">
-                  <select 
+                  <select
                     value={selectedClusterId || ''}
                     onChange={(e) => setSelectedClusterId(Number(e.target.value))}
                     className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 font-bold focus:outline-none focus:border-slate-500"
@@ -839,7 +845,7 @@ export default function App() {
                 <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-100 pb-1.5">Registered Entities</h4>
                 <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 text-[11px]">
                   {clusterDetail?.companies_detailed.map((c) => (
-                    <div 
+                    <div
                       key={c.cin}
                       onClick={() => {
                         setSelectedEntity({ id: c.cin, type: 'company', label: c.name });
@@ -855,21 +861,19 @@ export default function App() {
                           }
                         }
                       }}
-                      className={`p-2.5 rounded border cursor-pointer transition-all ${
-                        selectedEntity?.id === c.cin 
-                          ? 'bg-slate-100 border-slate-400 shadow-xs' 
-                          : 'bg-white border-slate-200 hover:border-slate-300'
-                      }`}
+                      className={`p-2.5 rounded border cursor-pointer transition-all ${selectedEntity?.id === c.cin
+                        ? 'bg-slate-100 border-slate-400 shadow-xs'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
                     >
                       <div className="font-bold text-slate-950 truncate">{c.name}</div>
                       <div className="text-[9px] text-slate-500 font-mono mt-0.5">{c.cin}</div>
                       <div className="flex items-center justify-between mt-2.5 text-[9px] font-semibold border-t border-slate-100 pt-1.5">
                         <span className="text-slate-400">Paid-up: ₹{(c.paidup_capital / 100000).toFixed(1)}L</span>
-                        <span className={`px-1.5 py-0.5 rounded font-bold border ${
-                          c.scores.composite_score >= 75 ? 'bg-red-50 text-red-700 border-red-100' :
+                        <span className={`px-1.5 py-0.5 rounded font-bold border ${c.scores.composite_score >= 75 ? 'bg-red-50 text-red-700 border-red-100' :
                           c.scores.composite_score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-100' :
-                          'bg-emerald-50 text-emerald-700 border-emerald-100'
-                        }`}>
+                            'bg-emerald-50 text-emerald-700 border-emerald-100'
+                          }`}>
                           Score: {c.scores.composite_score.toFixed(0)}
                         </span>
                       </div>
@@ -884,19 +888,19 @@ export default function App() {
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <div className="flex items-center space-x-2">
                   <div className="flex items-center bg-slate-100 rounded border border-slate-200 p-0.5">
-                    <button 
+                    <button
                       onClick={() => setViewMode('pyvis')}
                       className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'pyvis' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       <Eye className="w-3.5 h-3.5 text-slate-500" /> Interactive Graph
                     </button>
-                    <button 
+                    <button
                       onClick={() => setViewMode('graph')}
                       className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'graph' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
                       <Network className="w-3.5 h-3.5" /> Subgraph Canvas
                     </button>
-                    <button 
+                    <button
                       onClick={() => setViewMode('map')}
                       className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'map' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
@@ -904,10 +908,10 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-                
+
                 {viewMode === 'graph' && (
                   <div className="flex space-x-1.5">
-                    <button 
+                    <button
                       onClick={recenterGraph}
                       title="Fit view"
                       className="p-1.5 rounded bg-white border border-slate-200 text-slate-600 hover:text-slate-900 transition-all hover:bg-slate-50 shadow-xs"
@@ -915,13 +919,13 @@ export default function App() {
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
                     <div className="flex items-center bg-slate-100 rounded border border-slate-200 p-0.5">
-                      <button 
+                      <button
                         onClick={() => changeLayout('cose')}
                         className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'cose' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                       >
                         COSE
                       </button>
-                      <button 
+                      <button
                         onClick={() => changeLayout('circle')}
                         className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'circle' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                       >
@@ -930,7 +934,7 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                
+
                 {viewMode === 'pyvis' && (
                   <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wide bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">VisJS Force Simulation</span>
                 )}
@@ -942,13 +946,13 @@ export default function App() {
               {/* Display Canvas */}
               <div className="flex-1 bg-white rounded-lg relative border border-slate-200 overflow-hidden min-h-[420px]">
                 {viewMode === 'pyvis' && (
-                  <iframe 
-                    src={`${API_BASE}/static/pyvis_graph.html`} 
-                    className="w-full h-full min-h-[420px] border-0" 
+                  <iframe
+                    src={`${API_BASE}/static/pyvis_graph.html`}
+                    className="w-full h-full min-h-[420px] border-0"
                     title="Interactive Corporate Network Graph"
                   />
                 )}
-                
+
                 {viewMode === 'graph' && (
                   <>
                     {loading && (
@@ -958,7 +962,7 @@ export default function App() {
                       </div>
                     )}
                     <div ref={cyRef} className="w-full h-full min-h-[420px]" />
-                    
+
                     <div className="absolute bottom-3 left-3 bg-white/95 border border-slate-200 px-3 py-2 rounded-lg flex flex-col gap-1.5 text-[9px] font-semibold text-slate-500 pointer-events-none shadow-xs z-10 animate-fade-in">
                       <div className="flex items-center space-x-2">
                         <span className="w-3.5 h-3 bg-blue-900 border border-blue-700" style={{ clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' }}></span>
@@ -1003,12 +1007,11 @@ export default function App() {
               ) : (
                 <div className="flex-1 flex flex-col gap-4 animate-fade-in">
                   <div>
-                    <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
-                      selectedEntity.type === 'company' ? 'bg-blue-50 text-blue-800 border-blue-200' :
+                    <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${selectedEntity.type === 'company' ? 'bg-blue-50 text-blue-800 border-blue-200' :
                       selectedEntity.type === 'director' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
-                      selectedEntity.type === 'lender' ? 'bg-purple-50 text-purple-800 border-purple-200' :
-                      'bg-amber-50 text-amber-800 border-amber-200'
-                    }`}>
+                        selectedEntity.type === 'lender' ? 'bg-purple-50 text-purple-800 border-purple-200' :
+                          'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}>
                       {selectedEntity.type}
                     </span>
                     <h3 className="text-sm font-bold text-slate-900 mt-2 break-words leading-tight">{selectedEntity.label}</h3>
@@ -1023,11 +1026,10 @@ export default function App() {
                           <p className="text-[10px] text-slate-500 uppercase">Composite Risk Score</p>
                           <h4 className="text-xl font-bold text-slate-900 mt-0.5">{evidence.composite_score.toFixed(1)} <span className="text-xs text-slate-400 font-normal">/ 100</span></h4>
                         </div>
-                        <div className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
-                          evidence.composite_score >= 75 ? 'bg-red-100 text-red-800 border-red-200' :
+                        <div className={`px-2 py-0.5 rounded text-[10px] font-bold border ${evidence.composite_score >= 75 ? 'bg-red-100 text-red-800 border-red-200' :
                           evidence.composite_score >= 50 ? 'bg-amber-100 text-amber-800 border-amber-200' :
-                          'bg-emerald-100 text-emerald-800 border-emerald-200'
-                        }`}>
+                            'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          }`}>
                           {evidence.composite_score >= 75 ? 'CRITICAL' : evidence.composite_score >= 50 ? 'HIGH RISK' : 'COMPLIANT'}
                         </div>
                       </div>
@@ -1050,7 +1052,7 @@ export default function App() {
                                 ))}
                               </div>
                             )}
-                            
+
                             {detailedComp?.loans && detailedComp.loans.length > 0 && (
                               <div className="bg-purple-50 border border-purple-200 p-3 rounded-lg text-[10.5px]">
                                 <span className="text-[9.5px] text-purple-700 uppercase font-extrabold block mb-1">CERSAI Registered Loans</span>
@@ -1098,13 +1100,12 @@ export default function App() {
                         </h4>
                         <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-[10.5px]">
                           {evidence.evidence_trail.map((log, index) => (
-                            <div 
-                              key={index} 
-                              className={`p-2.5 rounded border leading-relaxed ${
-                                log.includes('Risk Score') && !log.includes('Risk Score: 0')
-                                  ? 'bg-red-50/50 border-red-200 text-red-950 font-medium' 
-                                  : 'bg-slate-50 border-slate-200 text-slate-600'
-                              }`}
+                            <div
+                              key={index}
+                              className={`p-2.5 rounded border leading-relaxed ${log.includes('Risk Score') && !log.includes('Risk Score: 0')
+                                ? 'bg-red-50/50 border-red-200 text-red-950 font-medium'
+                                : 'bg-slate-50 border-slate-200 text-slate-600'
+                                }`}
                             >
                               {log}
                             </div>
@@ -1159,9 +1160,56 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200 bg-white py-4 px-6 text-center text-[10px] font-semibold text-slate-400 flex justify-between items-center max-w-7xl mx-auto w-full">
-        <p>© 2026 Ministry of Corporate Affairs (MCA) Risk Intelligence Unit. Restricted Access Portal.</p>
-        <p>Built with React, TypeScript, FastAPI, SQLAlchemy, and NetworkX.</p>
+      <footer className="mt-auto flex flex-col w-full z-10 relative">
+        {/* Ministries Logos Strip */}
+        <div className="bg-white py-1 md:py-2 w-full flex justify-center border-t border-slate-200 shadow-sm">
+          <div className="w-full flex justify-center items-center">
+            <img src="/ministries-logos.png" alt="Ministries Logos" className="w-[100%] max-w-full h-auto object-contain" />
+          </div>
+        </div>
+
+        {/* Nav Links Band */}
+        <div className="bg-[#005e8d] py-3 text-white text-[13px] font-semibold flex flex-wrap justify-center items-center gap-x-6 gap-y-2 px-4 tracking-wide shadow-inner border-t-[1px] border-[#074769]">
+          <a href="#" className="hover:underline">About</a>
+          <span className="text-blue-300 hidden sm:inline">|</span>
+          <a href="#" className="hover:underline">Policies</a>
+          <span className="text-blue-300 hidden sm:inline">|</span>
+          <a href="#" className="hover:underline">Links</a>
+          <span className="text-blue-300 hidden sm:inline">|</span>
+          <a href="#" className="hover:underline">Trademark's Portal</a>
+        </div>
+
+        {/* Dark Footer Bottom */}
+        <div className="bg-[#051e3e] py-8 text-white px-8 flex justify-center w-full relative">
+          <div className="max-w-6xl w-full flex flex-col md:flex-row justify-between items-center md:items-start md:pr-8">
+            <div className="flex-1 flex flex-col items-center text-center space-y-3.5 pr-0 md:pr-12 md:border-r border-[#193d62]">
+              <p className="text-[12px] tracking-wide text-slate-100">© Copyright <span className="font-extrabold text-white">Ministry of Corporate Affairs</span>, Government of India. All Rights Reserved.</p>
+              <p className="text-[12px] tracking-wide text-slate-100">This site is best viewed at a screen resolution of 1366x768 using the latest versions of Chrome, Firefox, Safari, or Microsoft Edge.</p>
+              <a href="#" className="text-[12px] hover:underline underline-offset-4 tracking-wide text-white">Disclaimer</a>
+              <p className="text-[12px] mt-2 text-slate-100 tracking-wide pt-1">Last Updated: 14 August, 2026</p>
+            </div>
+
+            <div className="flex flex-col items-center md:items-start justify-start md:pl-12 mt-8 md:mt-1 min-w-[200px]">
+              <span className="text-[12px] font-bold mb-4 tracking-wider">Follow us:</span>
+              <div className="flex space-x-3">
+                <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center text-[#051e3e] cursor-pointer hover:bg-slate-200 transition">
+                  <span className="font-bold text-[13px] translate-y-[-1px]">𝕏</span>
+                </div>
+                <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center text-[#051e3e] cursor-pointer hover:bg-slate-200 transition font-serif font-bold text-md">f</div>
+                <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center text-[#051e3e] cursor-pointer hover:bg-slate-200 transition text-[9px] font-black">▶</div>
+                <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center text-[#051e3e] cursor-pointer hover:bg-slate-200 transition text-[10px] font-black">ig</div>
+                <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center text-[#051e3e] cursor-pointer hover:bg-slate-200 transition font-bold text-[10px]">in</div>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="absolute right-4 md:right-8 -top-5 bg-[#e86c00] rounded-full w-[42px] h-[42px] flex items-center justify-center shadow-lg hover:bg-[#c95d00] transition group border border-white/20"
+          >
+            <span className="text-white text-xl -translate-y-[-1px] font-mono group-hover:-translate-y-[2px] transition-transform">↑</span>
+          </button>
+        </div>
       </footer>
     </div>
   );
