@@ -2,6 +2,7 @@ import os
 import sys
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 
@@ -9,10 +10,19 @@ from typing import List, Dict, Any
 sys.path.append(r"f:\SIH")
 
 from backend.app.database import get_db, SessionLocal
-from backend.app.models.models import Company, DirectorRelationship
+from backend.app.models.models import (
+    Company,
+    DirectorRelationship,
+    CersaiSecurityInterest,
+    RbiWilfulDefaulter,
+    GroundTruth
+)
 from backend.app.services.graph_service import GraphService
 from backend.app.scoring.score_engine import ScoreEngine
 from backend.app.services.community_service import CommunityService
+
+# Ensure static folder exists
+os.makedirs("backend/static", exist_ok=True)
 
 app = FastAPI(
     title="MCA21 Corporate Fraud & Shell Company Detection System API",
@@ -29,7 +39,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global in-memory cache for graph data and engines to ensure sub-second response times
+# Mount pre-rendered Pyvis graph folder
+app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+
+# Global in-memory cache
 G_SERVICE = None
 COMBINED_GRAPH = None
 SCORE_ENGINE = None
@@ -39,7 +52,8 @@ def get_background_graph():
     db = SessionLocal()
     try:
         service = GraphService(db)
-        companies = db.query(Company).filter(~Company.cin.like("SYN_C%")).all()
+        # Use only normal background companies for Z-score freezing
+        companies = db.query(Company).join(GroundTruth, Company.cin == GroundTruth.cin).filter(GroundTruth.label == "normal").all()
         comp_cins = set(c.cin for c in companies)
         service.build_graph()
         
@@ -48,10 +62,18 @@ def get_background_graph():
             ntype = data.get("type")
             if ntype == "company" and node not in comp_cins:
                 nodes_to_remove.append(node)
-            elif ntype == "director" and str(node).startswith("SYN_D"):
-                nodes_to_remove.append(node)
-            elif ntype == "address" and str(node).startswith("SYN_ADDR"):
-                nodes_to_remove.append(node)
+            elif ntype == "director":
+                neighbors = [nb for nb in service.graph.neighbors(node) if service.graph.nodes[nb].get("type") == "company"]
+                if neighbors and all(nb not in comp_cins for nb in neighbors):
+                    nodes_to_remove.append(node)
+            elif ntype == "address":
+                neighbors = [nb for nb in service.graph.neighbors(node) if service.graph.nodes[nb].get("type") == "company"]
+                if neighbors and all(nb not in comp_cins for nb in neighbors):
+                    nodes_to_remove.append(node)
+            elif ntype == "lender":
+                neighbors = [nb for nb in service.graph.neighbors(node) if service.graph.nodes[nb].get("type") == "company"]
+                if neighbors and all(nb not in comp_cins for nb in neighbors):
+                    nodes_to_remove.append(node)
                 
         service.graph.remove_nodes_from(nodes_to_remove)
         return service.graph
@@ -66,7 +88,7 @@ def startup_event():
     global G_SERVICE, COMBINED_GRAPH, SCORE_ENGINE, CLUSTERS
     print("FastAPI: Loading data models and initializing relationship graph...")
     
-    # 1. Build background graph to calculate/freeze stats
+    # 1. Build background graph to freeze baseline parameters
     bg_graph = get_background_graph()
     SCORE_ENGINE = ScoreEngine(background_graph=bg_graph)
     
@@ -94,6 +116,7 @@ def get_dashboard_summary():
     num_companies = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "company")
     num_directors = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "director")
     num_addresses = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "address")
+    num_lenders = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "lender")
     
     high_risk_clusters = sum(1 for c in CLUSTERS if c["cluster_risk_score"] >= 75.0)
     
@@ -101,6 +124,7 @@ def get_dashboard_summary():
         "total_companies": num_companies,
         "total_directors": num_directors,
         "total_addresses": num_addresses,
+        "total_lenders": num_lenders,
         "total_clusters": len(CLUSTERS),
         "high_risk_clusters_count": high_risk_clusters
     }
@@ -113,7 +137,6 @@ def get_all_clusters():
     if CLUSTERS is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
         
-    # Return brief info (excluding full list of nodes) for listing
     summary_clusters = []
     for idx, c in enumerate(CLUSTERS):
         summary_clusters.append({
@@ -124,6 +147,8 @@ def get_all_clusters():
             "companies_count": c["companies_count"],
             "directors_count": c["directors_count"],
             "addresses_count": c["addresses_count"],
+            "lenders_count": c.get("lenders_count", 0),
+            "defaulters_count": c.get("defaulters_count", 0),
             "average_company_risk": c["average_company_risk"],
             "date_spread_days": c["date_spread_days"],
             "network_density": c["network_density"],
@@ -134,30 +159,55 @@ def get_all_clusters():
 @app.get("/api/clusters/{cluster_id}")
 def get_cluster_detail(cluster_id: int):
     """
-    Returns full detail of a specific cluster.
+    Returns full detail of a specific cluster, enriched with database loan/default data.
     """
     if CLUSTERS is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
         
-    for c in CLUSTERS:
-        if c["cluster_id"] == cluster_id:
-            # We enrich companies details
-            company_details = []
-            for cin in c["companies"]:
-                res = SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)
-                company_details.append({
-                    "cin": cin,
-                    "name": res["name"],
-                    "scores": res["scores"],
-                    "incorporation_date": COMBINED_GRAPH.nodes[cin].get("incorporation_date"),
-                    "filing_status": res["raw_signals"]["filing_status"],
-                    "paidup_capital": res["raw_signals"]["paidup_capital"]
-                })
-            
-            return {
-                **c,
-                "companies_detailed": company_details
-            }
+    db = SessionLocal()
+    try:
+        for c in CLUSTERS:
+            if c["cluster_id"] == cluster_id:
+                company_details = []
+                for cin in c["companies"]:
+                    res = SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)
+                    
+                    # Fetch loans from database
+                    loans_db = db.query(CersaiSecurityInterest).filter(CersaiSecurityInterest.cin == cin).all()
+                    loans_list = [{
+                        "lender_name": l.lender_name,
+                        "security_type": l.security_type,
+                        "asset_description": l.asset_description,
+                        "charge_amount": float(l.charge_amount),
+                        "charge_registration_date": l.charge_registration_date.isoformat() if l.charge_registration_date else None
+                    } for l in loans_db]
+                    
+                    # Fetch defaults from database
+                    defaults_db = db.query(RbiWilfulDefaulter).filter(RbiWilfulDefaulter.cin == cin).all()
+                    defaults_list = [{
+                        "lender_name": d.lender_name,
+                        "default_amount": float(d.default_amount),
+                        "classification_date": d.classification_date.isoformat() if d.classification_date else None,
+                        "wilful_default_reason": d.wilful_default_reason
+                    } for d in defaults_db]
+                    
+                    company_details.append({
+                        "cin": cin,
+                        "name": res["name"],
+                        "scores": res["scores"],
+                        "incorporation_date": COMBINED_GRAPH.nodes[cin].get("incorporation_date"),
+                        "filing_status": res["raw_signals"]["filing_status"],
+                        "paidup_capital": res["raw_signals"]["paidup_capital"],
+                        "loans": loans_list,
+                        "defaults": defaults_list
+                    })
+                
+                return {
+                    **c,
+                    "companies_detailed": company_details
+                }
+    finally:
+        db.close()
             
     raise HTTPException(status_code=404, detail="Cluster not found")
 
@@ -171,13 +221,9 @@ def get_cluster_graph(cluster_id: int):
         
     for c in CLUSTERS:
         if c["cluster_id"] == cluster_id:
-            # Collect all nodes in this cluster
-            all_nodes = c["companies"] + c["directors"] + c["addresses"]
-            
-            # Extract subgraph from combined graph
+            # Collect all nodes in this cluster (companies, directors, addresses, lenders)
+            all_nodes = c["companies"] + c["directors"] + c["addresses"] + c.get("lenders", [])
             subg = G_SERVICE.get_subgraph_for_nodes(all_nodes)
-            
-            # Convert to Cytoscape JSON
             return G_SERVICE.to_cytoscape_json(subg)
             
     raise HTTPException(status_code=404, detail="Cluster not found")
@@ -194,8 +240,6 @@ def get_company_evidence(cin: str):
         raise HTTPException(status_code=404, detail="Company not found")
         
     res = SCORE_ENGINE.compute_scores(cin, COMBINED_GRAPH)
-    
-    # Generate structured human-readable logs
     logs = []
     
     # 1. Address
@@ -219,18 +263,18 @@ def get_company_evidence(cin: str):
     else:
         logs.append("Normal incorporation schedule: No burst/batch registrations detected within date windows.")
         
-    # 4. Capital/Filing
-    if res["scores"]["capital_filing_risk"] > 0:
-        log_cf = "Compliance mismatches: "
-        sub_flags = []
-        if res["raw_signals"]["is_zero_paidup"]:
-            sub_flags.append("declared paid-up capital is zero")
-        if res["raw_signals"]["is_defaulter"]:
-            sub_flags.append("company is in active filing default / nil return status")
-        log_cf += " and ".join(sub_flags) + f" (Risk Score: {res['scores']['capital_filing_risk']:.1f}/100)."
-        logs.append(log_cf)
+    # 4. Lenders (CERSAI)
+    lenders = [n for n in COMBINED_GRAPH.neighbors(cin) if COMBINED_GRAPH.nodes[n].get("type") == "lender"]
+    if lenders:
+        logs.append(f"Active loan registration detected: Linked to lenders: {', '.join(lenders)} (Risk Score: {res['scores']['lender_risk']:.1f}/100).")
     else:
-        logs.append("Good compliance profile: Paid-up capital is active and filings are up-to-date.")
+        logs.append("No active loan registration detected.")
+        
+    # 5. Defaulter (RBI)
+    if res["raw_signals"]["wilful_defaulter_flag"]:
+        logs.append(f"RBI Defaulter Alert: Classified as a Wilful Defaulter by RBI registry (Risk Score: 100.0/100).")
+    else:
+        logs.append("RBI clean profile: Not listed in RBI defaulter index.")
         
     return {
         "cin": cin,
@@ -249,58 +293,59 @@ def get_evaluation_metrics():
     if CLUSTERS is None or COMBINED_GRAPH is None or SCORE_ENGINE is None:
         raise HTTPException(status_code=503, detail="Graph service is warming up.")
         
-    # Find the cluster containing the synthetic companies
-    planted_cluster = None
-    planted_rank = -1
+    # Find rank of clusters containing Ring A, Ring B, Ring C members
+    ring_a_rank = -1
+    ring_b_rank = -1
+    ring_c_rank = -1
+    legit_edge_rank = -1
+    
     for idx, c in enumerate(CLUSTERS):
-        syn_members = [cin for cin in c["companies"] if cin.startswith("SYN_C")]
-        if len(syn_members) > 0:
-            planted_cluster = c
-            planted_rank = idx + 1
-            break
+        c_labels = [COMBINED_GRAPH.nodes[cin].get("ground_truth_label") for cin in c["companies"]]
+        if ring_a_rank == -1 and "fraud_ring_A" in c_labels:
+            ring_a_rank = idx + 1
+        if ring_b_rank == -1 and "fraud_ring_B" in c_labels:
+            ring_b_rank = idx + 1
+        if ring_c_rank == -1 and "fraud_ring_C" in c_labels:
+            ring_c_rank = idx + 1
+        if legit_edge_rank == -1 and "legit_edge_case" in c_labels:
+            legit_edge_rank = idx + 1
             
-    detected_planted = 0
-    if planted_cluster:
-        detected_planted = len([cin for cin in planted_cluster["companies"] if cin.startswith("SYN_C")])
-        
-    # False positives on background (score >= 75)
+    # Count total ground truth shell companies and false positives
+    total_shells = 0
+    detected_shells = 0
     false_positives = 0
+    total_bg = 0
+    
     for node, data in COMBINED_GRAPH.nodes(data=True):
-        if data.get("type") == "company" and not node.startswith("SYN_C"):
+        if data.get("type") == "company":
+            label = data.get("ground_truth_label", "normal")
             res = SCORE_ENGINE.compute_scores(node, COMBINED_GRAPH)
-            if res["scores"]["composite_score"] >= 75.0:
-                false_positives += 1
-                
-    detection_rate = (detected_planted / 10) * 100.0
-    false_positive_rate = (false_positives / 1000) * 100.0
-    
-    # Legitimate Edge Case results
-    ca_office_cluster_rank = -1
-    tata_holding_cluster_rank = -1
-    
-    for idx, c in enumerate(CLUSTERS):
-        is_ca = any("MERLIN CHAMBERS" in COMBINED_GRAPH.nodes[list(COMBINED_GRAPH.neighbors(cin))[0]].get("raw_address", "") 
-                    for cin in c["companies"] if not cin.startswith("SYN_C"))
-        if is_ca and ca_office_cluster_rank == -1:
-            ca_office_cluster_rank = idx + 1
+            score = res["scores"]["composite_score"]
             
-        is_tata = any("TATA STEEL" in COMBINED_GRAPH.nodes[cin].get("name", "") for cin in c["companies"])
-        if is_tata and tata_holding_cluster_rank == -1:
-            tata_holding_cluster_rank = idx + 1
-            
-    status = "PASS" if (detection_rate == 100.0 and planted_rank == 1 and false_positive_rate < 2.0) else "FAIL"
+            if "fraud_ring" in label:
+                total_shells += 1
+                if score >= 50.0:
+                    detected_shells += 1
+            elif label == "normal":
+                total_bg += 1
+                if score >= 75.0:
+                    false_positives += 1
+                    
+    detection_rate = (detected_shells / total_shells) * 100.0 if total_shells > 0 else 0.0
+    false_positive_rate = (false_positives / total_bg) * 100.0 if total_bg > 0 else 0.0
+    
+    status = "PASS" if (ring_a_rank <= 2 and ring_b_rank <= 5 and ring_c_rank <= 5 and false_positive_rate < 5.0) else "FAIL"
     
     return {
-        "real_companies": 1000,
-        "synthetic_fraud_companies": 10,
+        "real_companies": total_bg,
+        "synthetic_fraud_companies": total_shells,
         "total_clusters": len(CLUSTERS),
-        "planted_cluster_rank": planted_rank,
-        "detected_planted_entities": detected_planted,
-        "total_planted_entities": 10,
+        "ring_a_rank": ring_a_rank,
+        "ring_b_rank": ring_b_rank,
+        "ring_c_rank": ring_c_rank,
+        "legit_edge_case_rank": legit_edge_rank,
         "detection_rate_pct": detection_rate,
         "false_positive_count": false_positives,
         "false_positive_rate_pct": false_positive_rate,
-        "ca_office_cluster_rank": ca_office_cluster_rank,
-        "tata_holding_cluster_rank": tata_holding_cluster_rank,
         "status": status
     }

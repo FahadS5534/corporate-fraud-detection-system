@@ -13,23 +13,22 @@ import {
   Network, 
   Maximize2,
   TrendingUp,
-  Award,
   BookOpen,
   Scale
 } from 'lucide-react';
 import { 
   AreaChart, 
   Area, 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
   CartesianGrid, 
   Tooltip, 
   ResponsiveContainer,
   PieChart,
   Pie,
-  Cell
+  Cell,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis
 } from 'recharts';
 
 const API_BASE = 'http://127.0.0.1:8000';
@@ -38,6 +37,7 @@ interface SummaryData {
   total_companies: number;
   total_directors: number;
   total_addresses: number;
+  total_lenders: number;
   total_clusters: number;
   high_risk_clusters_count: number;
 }
@@ -50,6 +50,8 @@ interface ClusterSummary {
   companies_count: number;
   directors_count: number;
   addresses_count: number;
+  lenders_count: number;
+  defaulters_count: number;
   average_company_risk: number;
   date_spread_days: number;
   network_density: number;
@@ -62,10 +64,14 @@ interface CompanyDetail {
   incorporation_date: string;
   filing_status: string;
   paidup_capital: number;
+  loans: any[];
+  defaults: any[];
   scores: {
     address_risk: number;
     director_risk: number;
     temporal_risk: number;
+    lender_risk: number;
+    defaulter_risk: number;
     capital_filing_risk: number;
     composite_score: number;
   };
@@ -77,6 +83,8 @@ interface ClusterDetail {
   companies_count: number;
   directors_count: number;
   addresses_count: number;
+  lenders_count: number;
+  defaulters_count: number;
   average_company_risk: number;
   date_spread_days: number;
   network_density: number;
@@ -84,6 +92,7 @@ interface ClusterDetail {
   companies_detailed: CompanyDetail[];
   directors: string[];
   addresses: string[];
+  lenders: string[];
 }
 
 interface EvidenceData {
@@ -94,6 +103,8 @@ interface EvidenceData {
     address_risk: number;
     director_risk: number;
     temporal_risk: number;
+    lender_risk: number;
+    defaulter_risk: number;
     capital_filing_risk: number;
     composite_score: number;
   };
@@ -101,38 +112,23 @@ interface EvidenceData {
   evidence_trail: string[];
 }
 
-interface EvaluationMetrics {
-  real_companies: number;
-  synthetic_fraud_companies: number;
-  total_clusters: number;
-  planted_cluster_rank: number;
-  detected_planted_entities: number;
-  total_planted_entities: number;
-  detection_rate_pct: number;
-  false_positive_count: number;
-  false_positive_rate_pct: number;
-  ca_office_cluster_rank: number;
-  tata_holding_cluster_rank: number;
-  status: string;
-}
+
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'rankings' | 'explorer' | 'evaluation'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'rankings' | 'explorer'>('overview');
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
   const [selectedClusterId, setSelectedClusterId] = useState<number | null>(null);
   const [clusterDetail, setClusterDetail] = useState<ClusterDetail | null>(null);
   const [selectedEntity, setSelectedEntity] = useState<any | null>(null);
   const [evidence, setEvidence] = useState<EvidenceData | null>(null);
-  const [evaluation, setEvaluation] = useState<EvaluationMetrics | null>(null);
   const [graphElements, setGraphElements] = useState<any>(null);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [layoutType, setLayoutType] = useState('cose');
   const [loading, setLoading] = useState(false);
-  const [evaluating, setEvaluating] = useState(false);
   
-  const [viewMode, setViewMode] = useState<'graph' | 'map'>('graph');
+  const [viewMode, setViewMode] = useState<'graph' | 'map' | 'pyvis'>('pyvis');
   const cyRef = useRef<HTMLDivElement>(null);
   const cyInstance = useRef<any>(null);
   const mapRef = useRef<HTMLDivElement>(null);
@@ -175,8 +171,8 @@ export default function App() {
 
       if (!mapRef.current) return;
 
-      const lats = addressNodes.map((n: any) => n.data.latitude);
-      const lngs = addressNodes.map((n: any) => n.data.longitude);
+      const lats = addressNodes.map((n: any) => parseFloat(n.data.latitude));
+      const lngs = addressNodes.map((n: any) => parseFloat(n.data.longitude));
       const avgLat = lats.reduce((a: number, b: number) => a + b, 0) / lats.length;
       const avgLng = lngs.reduce((a: number, b: number) => a + b, 0) / lngs.length;
 
@@ -222,7 +218,7 @@ export default function App() {
           </div>
         `;
 
-        L.marker([latitude, longitude], { icon: customIcon })
+        L.marker([parseFloat(latitude), parseFloat(longitude)], { icon: customIcon })
           .addTo(map)
           .bindPopup(popupContent);
       });
@@ -251,7 +247,6 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/clusters`);
       const data = await res.json();
       setClusters(data);
-      // Auto select top risk cluster
       if (data.length > 0 && selectedClusterId === null) {
         setSelectedClusterId(data[0].cluster_id);
       }
@@ -269,7 +264,6 @@ export default function App() {
       setSelectedEntity(null);
       setEvidence(null);
       
-      // Load Cytoscape Graph
       const graphRes = await fetch(`${API_BASE}/api/clusters/${id}/graph`);
       const graphData = await graphRes.json();
       setGraphElements(graphData);
@@ -290,20 +284,7 @@ export default function App() {
     }
   };
 
-  const triggerEvaluation = async () => {
-    setEvaluating(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/evaluation`);
-      const data = await res.json();
-      setEvaluation(data);
-      fetchSummary();
-      fetchClusters();
-    } catch (e) {
-      console.error("Failed to run evaluation", e);
-    } finally {
-      setEvaluating(false);
-    }
-  };
+
 
   // Render Cytoscape.js Relationship Graph
   const initCytoscape = (elements: any) => {
@@ -374,6 +355,18 @@ export default function App() {
           } as any
         },
         {
+          selector: 'node[type="lender"]',
+          style: {
+            'shape': 'triangle',
+            'background-color': '#5B21B6',
+            'border-width': '1.5px',
+            'border-color': '#8B5CF6',
+            'width': '22px',
+            'height': '22px',
+            'color': '#5B21B6'
+          } as any
+        },
+        {
           selector: 'edge',
           style: {
             'width': 1.5,
@@ -395,6 +388,13 @@ export default function App() {
           style: {
             'line-style': 'solid',
             'line-color': '#64748B'
+          } as any
+        },
+        {
+          selector: 'edge[relation="LENDER_OF"]',
+          style: {
+            'line-style': 'solid',
+            'line-color': '#C084FC'
           } as any
         },
         {
@@ -542,7 +542,7 @@ export default function App() {
               <span className="text-slate-300 font-light">|</span>
               <span className="text-xs font-bold text-slate-500 uppercase tracking-widest bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">MODULAR CLUSTERING</span>
             </div>
-            <p className="text-[11px] text-slate-500 font-medium mt-0.5">Shell Syndicate Screening &Modularity Cluster Analytics Dashboard</p>
+            <p className="text-[11px] text-slate-500 font-medium mt-0.5">Shell Syndicate Screening & Modularity Cluster Analytics Dashboard</p>
           </div>
         </div>
 
@@ -566,12 +566,7 @@ export default function App() {
           >
             <Network className="w-3.5 h-3.5" /> Network Workspace
           </button>
-          <button 
-            onClick={() => { setActiveTab('evaluation'); triggerEvaluation(); }}
-            className={`px-4 py-2 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'evaluation' ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
-          >
-            <Award className="w-3.5 h-3.5" /> Validation Console
-          </button>
+
         </nav>
       </header>
 
@@ -586,7 +581,7 @@ export default function App() {
               <div className="glass-panel p-4 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Companies Ingested</p>
-                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_companies || 1010}</h3>
+                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_companies || 0}</h3>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-slate-600">
                   <FolderGit2 className="w-5 h-5" />
@@ -596,7 +591,7 @@ export default function App() {
               <div className="glass-panel p-4 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Unique Directors Affiliated</p>
-                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_directors || 2269}</h3>
+                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_directors || 0}</h3>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-slate-600">
                   <Users className="w-5 h-5" />
@@ -606,7 +601,7 @@ export default function App() {
               <div className="glass-panel p-4 flex items-center justify-between">
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Registered Locations</p>
-                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_addresses || 929}</h3>
+                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_addresses || 0}</h3>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-slate-600">
                   <MapPin className="w-5 h-5" />
@@ -615,18 +610,18 @@ export default function App() {
 
               <div className="glass-panel p-4 flex items-center justify-between">
                 <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Louvain moduler clusters</p>
-                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_clusters || 847}</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Active Lenders (CERSAI)</p>
+                  <h3 className="text-2xl font-bold text-slate-800 mt-1">{summary?.total_lenders || 0}</h3>
                 </div>
                 <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-slate-600">
-                  <Network className="w-5 h-5" />
+                  <Scale className="w-5 h-5" />
                 </div>
               </div>
 
               <div className="glass-panel p-4 flex items-center justify-between border-red-200 bg-red-50/50">
                 <div>
                   <p className="text-[10px] font-bold text-red-600 uppercase tracking-wider">Critical Flagged Cases</p>
-                  <h3 className="text-2xl font-bold text-red-700 mt-1">{summary?.high_risk_clusters_count || 1}</h3>
+                  <h3 className="text-2xl font-bold text-red-700 mt-1">{summary?.high_risk_clusters_count || 0}</h3>
                 </div>
                 <div className="bg-red-100 p-2.5 rounded-lg border border-red-200 text-red-700">
                   <ShieldAlert className="w-5 h-5" />
@@ -675,7 +670,7 @@ export default function App() {
                         dataKey="value"
                       >
                         {riskDistributionData.map((_, index) => (
-                          <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                           <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                         ))}
                       </Pie>
                       <Tooltip contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: 8, fontSize: 11 }} />
@@ -716,8 +711,8 @@ export default function App() {
                   Identifies windowed batch floatations. Shell company groups incorporated in batches within a 30-day window are flagged by network statistics.
                 </div>
                 <div className="bg-slate-50 p-3 rounded border border-slate-200 leading-relaxed">
-                  <h5 className="font-bold text-slate-900 mb-1 flex items-center gap-1"><Scale className="w-3.5 h-3.5 text-purple-600" /> Capital & Default Checks</h5>
-                  Exposes non-compliant filings, companies operating with zero paid-up capital, and ongoing active default flags.
+                  <h5 className="font-bold text-slate-900 mb-1 flex items-center gap-1"><Scale className="w-3.5 h-3.5 text-purple-600" /> CERSAI & RBI Integration</h5>
+                  Cross-checks credit registry security charges and RBI wilful defaulter lists to uncover financial round-tripping networks.
                 </div>
               </div>
             </div>
@@ -753,6 +748,8 @@ export default function App() {
                     <th>Companies</th>
                     <th>Directors</th>
                     <th>Addresses</th>
+                    <th>Lenders</th>
+                    <th>Defaulters</th>
                     <th>Density</th>
                     <th>Avg Co. Risk</th>
                     <th>Modularity Risk score</th>
@@ -770,6 +767,8 @@ export default function App() {
                       <td>{c.companies_count}</td>
                       <td>{c.directors_count}</td>
                       <td>{c.addresses_count}</td>
+                      <td>{c.lenders_count}</td>
+                      <td>{c.defaulters_count}</td>
                       <td>{(c.network_density * 100).toFixed(1)}%</td>
                       <td>{c.average_company_risk.toFixed(1)}</td>
                       <td>
@@ -796,7 +795,7 @@ export default function App() {
                   ))}
                   {filteredClusters.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="text-center text-slate-400 py-8 font-medium">No clusters matched search criteria.</td>
+                      <td colSpan={11} className="text-center text-slate-400 py-8 font-medium">No clusters matched search criteria.</td>
                     </tr>
                   )}
                 </tbody>
@@ -829,7 +828,10 @@ export default function App() {
                   <div>Companies: <span className="text-slate-800">{clusterDetail?.companies_count}</span></div>
                   <div>Directors: <span className="text-slate-800">{clusterDetail?.directors_count}</span></div>
                   <div>Locations: <span className="text-slate-800">{clusterDetail?.addresses_count}</span></div>
-                  <div>Risk score: <span className="text-red-600 font-bold">{clusterDetail?.cluster_risk_score.toFixed(1)}</span></div>
+                  <div>Lenders: <span className="text-slate-800">{clusterDetail?.lenders_count}</span></div>
+                  <div className="col-span-2 border-t border-slate-200 pt-1.5 mt-1">
+                    Risk Score: <span className="text-red-600 font-bold">{clusterDetail?.cluster_risk_score.toFixed(1)}</span>
+                  </div>
                 </div>
               </div>
 
@@ -842,7 +844,7 @@ export default function App() {
                       onClick={() => {
                         setSelectedEntity({ id: c.cin, type: 'company', label: c.name });
                         fetchEvidence(c.cin);
-                        if (cyInstance.current) {
+                        if (viewMode === 'graph' && cyInstance.current) {
                           const node = cyInstance.current.getElementById(c.cin);
                           if (node.length > 0) {
                             cyInstance.current.elements().removeClass('highlighted').removeClass('dimmed');
@@ -877,16 +879,22 @@ export default function App() {
               </div>
             </div>
 
-            {/* Center Column: Cytoscape Graph Canvas / Leaflet Map */}
+            {/* Center Column: Graph Canvas / Map / Pyvis iframe */}
             <div className="lg:col-span-2 glass-panel p-4 flex flex-col gap-3 min-h-[480px]">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <div className="flex items-center space-x-2">
                   <div className="flex items-center bg-slate-100 rounded border border-slate-200 p-0.5">
                     <button 
+                      onClick={() => setViewMode('pyvis')}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'pyvis' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                    >
+                      <Eye className="w-3.5 h-3.5 text-slate-500" /> Interactive Graph
+                    </button>
+                    <button 
                       onClick={() => setViewMode('graph')}
                       className={`px-2.5 py-1 text-[10px] font-bold rounded transition-all flex items-center gap-1 ${viewMode === 'graph' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
                     >
-                      <Network className="w-3.5 h-3.5" /> Graph View
+                      <Network className="w-3.5 h-3.5" /> Subgraph Canvas
                     </button>
                     <button 
                       onClick={() => setViewMode('map')}
@@ -897,7 +905,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                {viewMode === 'graph' ? (
+                {viewMode === 'graph' && (
                   <div className="flex space-x-1.5">
                     <button 
                       onClick={recenterGraph}
@@ -919,24 +927,29 @@ export default function App() {
                       >
                         Circle
                       </button>
-                      <button 
-                        onClick={() => changeLayout('grid')}
-                        className={`px-2 py-0.5 text-[9px] font-bold rounded transition-all ${layoutType === 'grid' ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
-                      >
-                        Grid
-                      </button>
                     </div>
                   </div>
-                ) : (
-                  <div className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
-                    <MapPin className="w-3 h-3 text-red-600" /> Geographic Clustering
-                  </div>
+                )}
+                
+                {viewMode === 'pyvis' && (
+                  <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wide bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">VisJS Force Simulation</span>
+                )}
+                {viewMode === 'map' && (
+                  <span className="text-[9px] font-extrabold text-slate-500 uppercase tracking-wide bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">Geographic Mapping</span>
                 )}
               </div>
 
-              {/* The Display Canvas */}
+              {/* Display Canvas */}
               <div className="flex-1 bg-white rounded-lg relative border border-slate-200 overflow-hidden min-h-[420px]">
-                {viewMode === 'graph' ? (
+                {viewMode === 'pyvis' && (
+                  <iframe 
+                    src={`${API_BASE}/static/pyvis_graph.html`} 
+                    className="w-full h-full min-h-[420px] border-0" 
+                    title="Interactive Corporate Network Graph"
+                  />
+                )}
+                
+                {viewMode === 'graph' && (
                   <>
                     {loading && (
                       <div className="absolute inset-0 bg-white/80 backdrop-blur-xs z-10 flex items-center justify-center space-x-2">
@@ -946,8 +959,7 @@ export default function App() {
                     )}
                     <div ref={cyRef} className="w-full h-full min-h-[420px]" />
                     
-                    {/* Node type legends */}
-                    <div className="absolute bottom-3 left-3 bg-white/95 border border-slate-200 px-3 py-2 rounded-lg flex flex-col gap-1.5 text-[9px] font-semibold text-slate-500 pointer-events-none shadow-xs z-10">
+                    <div className="absolute bottom-3 left-3 bg-white/95 border border-slate-200 px-3 py-2 rounded-lg flex flex-col gap-1.5 text-[9px] font-semibold text-slate-500 pointer-events-none shadow-xs z-10 animate-fade-in">
                       <div className="flex items-center space-x-2">
                         <span className="w-3.5 h-3 bg-blue-900 border border-blue-700" style={{ clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' }}></span>
                         <span>Company (Hexagon)</span>
@@ -960,10 +972,22 @@ export default function App() {
                         <span className="w-3.5 h-3 bg-amber-900 border border-amber-700"></span>
                         <span>Address (Square)</span>
                       </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="w-3.5 h-3 bg-purple-900 border border-purple-700" style={{ clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' }}></span>
+                        <span>Lender Bank (Triangle)</span>
+                      </div>
                     </div>
                   </>
-                ) : (
-                  <div ref={mapRef} className="w-full h-full min-h-[420px]" style={{ zIndex: 1 }} />
+                )}
+
+                {viewMode === 'map' && (
+                  <>
+                    <div className="absolute top-3 left-1/2 transform -translate-x-1/2 bg-amber-50/95 border border-amber-200 px-4 py-2 rounded-lg text-[10px] font-bold text-amber-800 flex items-center gap-1.5 shadow-md z-10 select-none pointer-events-none">
+                      <ShieldAlert className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                      <span>Note: Geographical coordinates are hash-derived rough estimates for proximity intelligence.</span>
+                    </div>
+                    <div ref={mapRef} className="w-full h-full min-h-[420px]" style={{ zIndex: 1 }} />
+                  </>
                 )}
               </div>
             </div>
@@ -982,6 +1006,7 @@ export default function App() {
                     <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border ${
                       selectedEntity.type === 'company' ? 'bg-blue-50 text-blue-800 border-blue-200' :
                       selectedEntity.type === 'director' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                      selectedEntity.type === 'lender' ? 'bg-purple-50 text-purple-800 border-purple-200' :
                       'bg-amber-50 text-amber-800 border-amber-200'
                     }`}>
                       {selectedEntity.type}
@@ -1007,6 +1032,43 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* Dynamic CERSAI & RBI details */}
+                      {(() => {
+                        const detailedComp = clusterDetail?.companies_detailed.find(c => c.cin === evidence.cin);
+                        return (
+                          <div className="flex flex-col gap-2">
+                            {detailedComp?.defaults && detailedComp.defaults.length > 0 && (
+                              <div className="bg-red-50 border border-red-200 p-3 rounded-lg text-[10.5px]">
+                                <span className="text-[9.5px] text-red-700 uppercase font-extrabold block mb-1">RBI Wilful Defaulter Alert</span>
+                                {detailedComp.defaults.map((d: any, idx: number) => (
+                                  <div key={idx} className="border-b border-red-100 last:border-b-0 py-1 leading-relaxed">
+                                    <div><b>Lender:</b> {d.lender_name}</div>
+                                    <div><b>Default Amount:</b> ₹{(d.default_amount / 10000000).toFixed(2)} Cr</div>
+                                    <div><b>Reason:</b> {d.wilful_default_reason}</div>
+                                    {d.classification_date && <div><b>Date:</b> {d.classification_date}</div>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            
+                            {detailedComp?.loans && detailedComp.loans.length > 0 && (
+                              <div className="bg-purple-50 border border-purple-200 p-3 rounded-lg text-[10.5px]">
+                                <span className="text-[9.5px] text-purple-700 uppercase font-extrabold block mb-1">CERSAI Registered Loans</span>
+                                {detailedComp.loans.map((l: any, idx: number) => (
+                                  <div key={idx} className="border-b border-purple-100 last:border-b-0 py-1 leading-relaxed">
+                                    <div><b>Lender:</b> {l.lender_name}</div>
+                                    <div><b>Security Type:</b> {l.security_type}</div>
+                                    <div><b>Asset:</b> {l.asset_description}</div>
+                                    <div><b>Amount:</b> ₹{(l.charge_amount / 10000000).toFixed(2)} Cr</div>
+                                    {l.charge_registration_date && <div><b>Date:</b> {l.charge_registration_date}</div>}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
                       {/* Signals chart */}
                       <div className="h-[120px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
@@ -1015,7 +1077,8 @@ export default function App() {
                               { name: 'Addr', score: evidence.individual_scores.address_risk },
                               { name: 'Dir', score: evidence.individual_scores.director_risk },
                               { name: 'Burst', score: evidence.individual_scores.temporal_risk },
-                              { name: 'Cap', score: evidence.individual_scores.capital_filing_risk }
+                              { name: 'Lend', score: evidence.individual_scores.lender_risk },
+                              { name: 'Def', score: evidence.individual_scores.defaulter_risk }
                             ]}
                             margin={{ top: 5, right: 5, left: -35, bottom: 0 }}
                           >
@@ -1055,10 +1118,10 @@ export default function App() {
                     <div className="space-y-3 text-[11px] text-slate-600 leading-relaxed">
                       <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
                         <span className="text-[9px] text-slate-400 uppercase font-bold block">Board Directorships Count</span>
-                        <span className="text-lg font-bold text-slate-900 mt-1 block">{cyInstance.current?.getElementById(selectedEntity.id).degree() || 1} Companies</span>
+                        <span className="text-lg font-bold text-slate-900 mt-1 block">Concurrently Active</span>
                       </div>
                       <div>
-                        Under Section 165 of the Companies Act 2013, individuals are prohibited from holding board directorships in more than 20 companies concurrently. Multiple coordinate shell directorships flag high dummy centrality risks.
+                        Tracks multi-company registration overlaps. Multiple coordinates indicate potential dummy director affiliations holding board seats across coordinate tax mills.
                       </div>
                     </div>
                   )}
@@ -1066,11 +1129,23 @@ export default function App() {
                   {selectedEntity.type === 'address' && (
                     <div className="space-y-3 text-[11px] text-slate-600 leading-relaxed">
                       <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
-                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Registered Coordinates Load</span>
-                        <span className="text-lg font-bold text-slate-900 mt-1 block">{cyInstance.current?.getElementById(selectedEntity.id).degree() || 1} Companies</span>
+                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Registered Coordinate Load</span>
+                        <span className="text-lg font-bold text-slate-900 mt-1 block">Shared Office Hub</span>
                       </div>
                       <div>
-                        Registered address coordinate clusters highlight potential shell-company coordinates (tax-mills) operating from duplicate desk space.
+                        Registered address coordinate clusters highlight potential shell-company locations operating from duplicate desk space.
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedEntity.type === 'lender' && (
+                    <div className="space-y-3 text-[11px] text-slate-600 leading-relaxed">
+                      <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg">
+                        <span className="text-[9px] text-slate-400 uppercase font-bold block">Lender Credit Institution</span>
+                        <span className="text-lg font-bold text-slate-950 mt-1 block">CERSAI Securitised Bank</span>
+                      </div>
+                      <div>
+                        Shared lender registries help identify cooperative or multi-state bank siphoning rings, where all connected shell corporations borrow from the same branch coordinates.
                       </div>
                     </div>
                   )}
@@ -1080,104 +1155,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 4: VALIDATION CONSOLE */}
-        {activeTab === 'evaluation' && (
-          <div className="glass-panel p-6 flex flex-col gap-6 animate-fade-in max-w-4xl mx-auto w-full">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Award className="w-5 h-5 text-slate-700" /> Pipeline Validation Suite
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">Verification of planted positive detection limits and false positive thresholds.</p>
-              </div>
-              <button 
-                onClick={triggerEvaluation}
-                disabled={evaluating}
-                className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-500 text-white text-xs px-4 py-2 rounded-md font-bold transition-all flex items-center gap-2 shadow-xs"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${evaluating ? 'animate-spin' : ''}`} /> 
-                {evaluating ? 'Executing Tests...' : 'Run Pipeline Tests'}
-              </button>
-            </div>
 
-            {evaluation ? (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {/* Left Card: Score Summary */}
-                <div className="md:col-span-2 flex flex-col gap-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Detection Accuracy</span>
-                      <h4 className="text-3xl font-extrabold text-slate-900 mt-2">{evaluation.detection_rate_pct.toFixed(1)}%</h4>
-                      <p className="text-[10px] text-slate-500 mt-1">Successfully identified {evaluation.detected_planted_entities} of {evaluation.total_planted_entities} planted shell syndicate entities.</p>
-                    </div>
-
-                    <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg">
-                      <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">False Positive Rate</span>
-                      <h4 className="text-3xl font-extrabold text-slate-900 mt-2">{evaluation.false_positive_rate_pct.toFixed(2)}%</h4>
-                      <p className="text-[10px] text-slate-500 mt-1">Zero-default background threshold check (flagged {evaluation.false_positive_count} of {evaluation.real_companies} background units).</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg flex-1">
-                    <h5 className="text-[10px] font-bold text-slate-500 uppercase mb-3">Unit Test Log Stream</h5>
-                    <div className="space-y-2 text-[10px] font-mono text-slate-600 bg-white p-3 rounded border border-slate-200 max-h-[220px] overflow-y-auto leading-relaxed">
-                      <div>[INFO] Loaded 1,000 baseline records from SQLite Company Masters.</div>
-                      <div>[INFO] Mean Address degree computed: 2.27. StdDev: 6.24.</div>
-                      <div>[INFO] Z-score statistical baseline frozen. Modularity thresholds locked.</div>
-                      <div>[INFO] Injected 10 synthetic coordinated shell syndicates.</div>
-                      <div>[INFO] moduler Louvain clustering complete. Discovered {evaluation.total_clusters} communities.</div>
-                      <div className="text-emerald-700 font-bold">[PASS] Planted fraud syndicate successfully grouped in Rank #{evaluation.planted_cluster_rank} (Risk score: {clusters[0]?.cluster_risk_score.toFixed(1)}).</div>
-                      <div className="text-emerald-700 font-bold">[PASS] 0% false positive flags detected above statistical threshold limit (Score &gt;= 75).</div>
-                      <div className="text-emerald-700 font-bold">[SUCCESS] All pipeline integration test suites completed successfully.</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Right Card: Status & Passes */}
-                <div className="bg-slate-50 border border-slate-200 p-5 rounded-lg flex flex-col justify-between items-center text-center">
-                  <div>
-                    <span className="text-[9px] text-slate-500 uppercase font-bold tracking-wider">Evaluation Status</span>
-                    <div className="mt-4 flex items-center justify-center">
-                      <span className={`px-5 py-2 rounded-full text-xs font-bold tracking-widest border shadow-xs ${
-                        evaluation.status === 'PASS' 
-                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
-                          : 'bg-red-50 text-red-800 border-red-200'
-                      }`}>
-                        {evaluation.status}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="w-full space-y-3 mt-6 text-[10.5px] text-left border-t border-slate-200 pt-5 font-semibold text-slate-600">
-                    <div className="flex items-center justify-between">
-                      <span>Planted Syndicate Cluster Rank:</span>
-                      <span className="text-slate-900 flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Rank #{evaluation.planted_cluster_rank}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>CA Shared Address Rank:</span>
-                      <span className="text-slate-900 flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Rank #{evaluation.ca_office_cluster_rank} (Pass)
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Tata Group Structure Rank:</span>
-                      <span className="text-slate-900 flex items-center gap-1">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Rank #{evaluation.tata_holding_cluster_rank} (Pass)
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-                <RefreshCw className="w-8 h-8 text-slate-400 animate-spin mb-3" />
-                <span className="text-xs font-bold uppercase tracking-wider">Loading verification metrics...</span>
-              </div>
-            )}
-          </div>
-        )}
       </main>
 
       {/* Footer */}

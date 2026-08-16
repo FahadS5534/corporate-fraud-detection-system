@@ -27,7 +27,6 @@ class SignalsEngine:
             
         addr_node = address_nodes[0]
         # Degree of address node represents number of companies connected to it
-        # Since it's bipartite (Address -> Company), degree is exactly the company count
         company_count = self.graph.degree(addr_node)
         
         return {
@@ -151,6 +150,29 @@ class SignalsEngine:
             "is_defaulter": is_defaulter
         }
 
+    def get_ground_truth_signal(self, company_cin):
+        if not self.graph.has_node(company_cin):
+            return {
+                "synthetic_shell_ground_truth": "No",
+                "synthetic_ring_id": None
+            }
+        comp_data = self.graph.nodes[company_cin]
+        label = comp_data.get("ground_truth_label", "normal")
+        is_shell = "Yes" if "fraud_ring" in label else "No"
+        ring_id = label if "fraud_ring" in label or label == "legit_edge_case" else None
+        return {
+            "synthetic_shell_ground_truth": is_shell,
+            "synthetic_ring_id": ring_id
+        }
+
+    def get_rbi_defaulter_signal(self, company_cin):
+        if not self.graph.has_node(company_cin):
+            return {"wilful_defaulter": False}
+        comp_data = self.graph.nodes[company_cin]
+        return {
+            "wilful_defaulter": comp_data.get("wilful_defaulter_flag", False)
+        }
+
     def compute_all_raw_signals(self, company_cin, window_days=30):
         """
         Returns a combined dictionary of all raw features.
@@ -159,6 +181,8 @@ class SignalsEngine:
         dirs = self.get_director_signal(company_cin)
         burst = self.get_incorporation_burst_signal(company_cin, window_days)
         cap = self.get_capital_filing_signal(company_cin)
+        gt = self.get_ground_truth_signal(company_cin)
+        rbi = self.get_rbi_defaulter_signal(company_cin)
         
         return {
             "cin": company_cin,
@@ -171,5 +195,8 @@ class SignalsEngine:
             "paidup_ratio": cap["paidup_ratio"],
             "filing_status": cap["filing_status"],
             "is_zero_paidup": cap["is_zero_paidup"],
-            "is_defaulter": cap["is_defaulter"]
+            "is_defaulter": cap["is_defaulter"],
+            "synthetic_shell_ground_truth": gt["synthetic_shell_ground_truth"],
+            "synthetic_ring_id": gt["synthetic_ring_id"],
+            "wilful_defaulter_flag": rbi["wilful_defaulter"]
         }

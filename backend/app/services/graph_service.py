@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 sys.path.append(r"f:\SIH")
 
 from backend.app.database import SessionLocal
-from backend.app.models.models import Company, DirectorRelationship
+from backend.app.models.models import (
+    Company,
+    DirectorRelationship,
+    CersaiSecurityInterest,
+    RbiWilfulDefaulter,
+    GroundTruth
+)
 
 def normalize_address(address_str):
     if not address_str:
@@ -70,7 +76,7 @@ class GraphService:
 
     def build_graph(self):
         """
-        Loads companies and director relationships from database
+        Loads companies, director relationships, CERSAI loans, and RBI defaulters from database
         and constructs the in-memory NetworkX relationship graph.
         """
         self.graph.clear()
@@ -80,7 +86,6 @@ class GraphService:
         print(f"GraphService: Loading {len(companies)} companies into graph...")
         
         for comp in companies:
-            # Normalize registered address
             norm_addr = normalize_address(comp.registered_office_address)
             
             # Add Company Node
@@ -89,11 +94,12 @@ class GraphService:
                 type="company",
                 name=comp.company_name,
                 status=comp.company_status,
-                incorporation_date=comp.date_of_incorporation.isoformat() if comp.date_of_incorporation else "",
+                incorporation_date=comp.date_of_registration.isoformat() if comp.date_of_registration else "",
                 authorized_capital=float(comp.authorized_capital),
                 paidup_capital=float(comp.paidup_capital),
                 filing_status=comp.filing_status,
-                roc_code=comp.roc_code
+                wilful_defaulter_flag=False,
+                ground_truth_label="normal"
             )
             
             # Add Address Node if valid
@@ -112,21 +118,47 @@ class GraphService:
 
         # 2. Fetch all director relationships
         relations = self.db.query(DirectorRelationship).all()
-        print(f"GraphService: Loading {len(relations)} relationships into graph...")
+        print(f"GraphService: Loading {len(relations)} director relationships into graph...")
         
         for rel in relations:
-            din = rel.din
-            # Add Director Node if not exists
+            din = str(rel.din)
             if not self.graph.has_node(din):
                 self.graph.add_node(
                     din,
                     type="director",
                     name=rel.director_name
                 )
-                
-            # Add edge: Director is a DIRECTOR_OF Company (if company node exists)
             if self.graph.has_node(rel.cin):
-                self.graph.add_edge(din, rel.cin, relation="DIRECTOR_OF", designation=rel.designation)
+                self.graph.add_edge(din, rel.cin, relation="DIRECTOR_OF")
+
+        # 3. Fetch all CERSAI Loans (Lenders)
+        loans = self.db.query(CersaiSecurityInterest).all()
+        print(f"GraphService: Loading {len(loans)} CERSAI loans into graph...")
+        
+        for loan in loans:
+            lender = loan.lender_name
+            if not self.graph.has_node(lender):
+                self.graph.add_node(
+                    lender,
+                    type="lender",
+                    name=lender
+                )
+            if self.graph.has_node(loan.cin):
+                self.graph.add_edge(loan.cin, lender, relation="LENDER_OF")
+
+        # 4. Fetch all RBI Defaulters
+        defaulters = self.db.query(RbiWilfulDefaulter).all()
+        print(f"GraphService: Loading {len(defaulters)} RBI defaulters...")
+        for d in defaulters:
+            if self.graph.has_node(d.cin):
+                self.graph.nodes[d.cin]["wilful_defaulter_flag"] = True
+
+        # 5. Fetch Ground Truth Labels
+        gt_labels = self.db.query(GroundTruth).all()
+        print(f"GraphService: Loading {len(gt_labels)} Ground Truth labels into graph...")
+        for gt in gt_labels:
+            if self.graph.has_node(gt.cin):
+                self.graph.nodes[gt.cin]["ground_truth_label"] = gt.label
 
         print(f"GraphService: Built graph with {self.graph.number_of_nodes()} nodes and {self.graph.number_of_edges()} edges.")
         return self.graph
@@ -137,10 +169,6 @@ class GraphService:
         return list(self.graph.neighbors(node_id))
 
     def get_subgraph_for_nodes(self, node_list):
-        """
-        Extracts a subgraph containing the specified nodes and their direct connections.
-        """
-        # Collect nodes and their immediate neighbors
         sub_nodes = set(node_list)
         for node in node_list:
             if self.graph.has_node(node):
@@ -148,9 +176,6 @@ class GraphService:
         return self.graph.subgraph(sub_nodes)
 
     def to_cytoscape_json(self, custom_graph=None):
-        """
-        Converts the NetworkX graph to Cytoscape.js compatible JSON format.
-        """
         g = custom_graph if custom_graph is not None else self.graph
         elements = []
         

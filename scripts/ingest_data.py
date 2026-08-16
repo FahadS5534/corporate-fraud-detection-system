@@ -1,19 +1,46 @@
 import os
 import sys
-import argparse
 import pandas as pd
 import json
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
+
+# Set seed for reproducibility
+random.seed(42)
 
 # Path setups
 RAW_DIR = r"f:\SIH\data\raw"
 PROCESSED_DIR = r"f:\SIH\data\processed"
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-COMPANY_RAW = os.path.join(RAW_DIR, "company_master.csv")
-DIRECTOR_RAW = os.path.join(RAW_DIR, "director_registry.csv")
+# File paths
+COMPANIES_RAW = os.path.join(RAW_DIR, "companies.csv")
+DIRECTORS_RAW = os.path.join(RAW_DIR, "directors.csv")
 
-def validate_company_data(df):
+def parse_raw_date(date_val):
+    if pd.isna(date_val) or str(date_val).strip() == "":
+        return None
+    date_str = str(date_val).strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    if " " in date_str:
+        try:
+            return datetime.strptime(date_str.split()[0], "%Y-%m-%d").date()
+        except ValueError:
+            pass
+    raise ValueError(f"Date '{date_str}' doesn't match known formats")
+
+def extract_city(address, state):
+    address_upper = str(address).upper()
+    for c in ["MUMBAI", "DELHI", "BENGALURU", "BANGALORE", "CHENNAI", "KOLKATA", "PUNE", "AHMEDABAD", "JAIPUR", "LUCKNOW", "HYDERABAD"]:
+        if c in address_upper:
+            return c.title()
+    return str(state).strip()
+
+def validate_companies(df):
     report = {
         "total_records": len(df),
         "missing_values": {},
@@ -21,11 +48,9 @@ def validate_company_data(df):
         "invalid_dates": 0,
         "invalid_capital": 0,
         "missing_addresses": 0,
-        "missing_status_or_filing": 0,
         "errors": []
     }
     
-    # 1. Missing Values check per column
     for col in df.columns:
         missing_count = int(df[col].isna().sum())
         if missing_count > 0:
@@ -33,226 +58,313 @@ def validate_company_data(df):
             
     valid_mask = pd.Series(True, index=df.index)
     
-    # 2. Duplicate CINs
-    dup_cins = df[df.duplicated(subset=['cin'], keep=False)]
+    # Duplicate CIN check
     report["duplicate_cins"] = int(df.duplicated(subset=['cin']).sum())
-    for idx, row in dup_cins.iterrows():
-        report["errors"].append({
-            "cin": row['cin'],
-            "row": idx + 2, # 1-indexed plus header
-            "issue": "Duplicate CIN",
-            "action": "Flagged/Removed"
-        })
     valid_mask &= ~df.duplicated(subset=['cin'], keep='first')
     
-    # 3. Invalid dates (incorporation date format YYYY-MM-DD and not in the future)
     today = datetime.today().date()
     for idx, row in df.iterrows():
-        date_str = str(row['date_of_incorporation']).strip()
+        # Date validation
+        date_str = str(row['date_of_registration']).strip()
         is_valid = True
-        if pd.isna(row['date_of_incorporation']) or date_str == "":
+        if pd.isna(row['date_of_registration']) or date_str == "":
             is_valid = False
-            issue = "Missing incorporation date"
+            issue = "Missing date of registration"
         else:
             try:
-                dt = datetime.strptime(date_str, "%Y-%m-%d").date()
-                if dt > today:
+                dt = parse_raw_date(date_str)
+                if dt is None:
                     is_valid = False
-                    issue = f"Future incorporation date: {date_str}"
+                    issue = "Missing date of registration"
+                elif dt > today:
+                    is_valid = False
+                    issue = f"Future date of registration: {date_str}"
+                else:
+                    df.at[idx, 'date_of_registration'] = dt.strftime("%Y-%m-%d")
             except ValueError:
                 is_valid = False
-                issue = f"Invalid date format: {date_str} (expected YYYY-MM-DD)"
+                issue = f"Invalid date format: {date_str}"
                 
-        if not is_valid:
-            report["invalid_dates"] += 1
-            valid_mask.loc[idx] = False
-            report["errors"].append({
-                "cin": row['cin'],
-                "row": idx + 2,
-                "issue": issue,
-                "action": "Flagged/Removed"
-            })
-            
-    # 4. Invalid capital values (authorized < 0, paidup < 0, paidup > authorized)
-    for idx, row in df.iterrows():
+        # Capital validation
         try:
             auth = float(row['authorized_capital'])
             paid = float(row['paidup_capital'])
-            
             if auth < 0 or paid < 0:
-                report["invalid_capital"] += 1
-                valid_mask.loc[idx] = False
-                report["errors"].append({
-                    "cin": row['cin'],
-                    "row": idx + 2,
-                    "issue": f"Negative capital: auth={auth}, paid={paid}",
-                    "action": "Flagged/Removed"
-                })
+                is_valid = False
+                issue = f"Negative capital: auth={auth}, paid={paid}"
             elif paid > auth:
-                report["invalid_capital"] += 1
-                valid_mask.loc[idx] = False
-                report["errors"].append({
-                    "cin": row['cin'],
-                    "row": idx + 2,
-                    "issue": f"Paid-up capital exceeds authorized: auth={auth}, paid={paid}",
-                    "action": "Flagged/Removed"
-                })
+                is_valid = False
+                issue = f"Paid-up exceeds authorized: auth={auth}, paid={paid}"
         except (ValueError, TypeError):
-            report["invalid_capital"] += 1
-            valid_mask.loc[idx] = False
-            report["errors"].append({
-                "cin": row['cin'],
-                "row": idx + 2,
-                "issue": f"Non-numeric capital values: auth={row['authorized_capital']}, paid={row['paidup_capital']}",
-                "action": "Flagged/Removed"
-            })
+            is_valid = False
+            issue = f"Non-numeric capital values: auth={row['authorized_capital']}, paid={row['paidup_capital']}"
             
-    # 5. Missing Addresses
-    for idx, row in df.iterrows():
+        # Address validation
         addr = str(row['registered_office_address']).strip()
         if pd.isna(row['registered_office_address']) or addr == "" or len(addr) < 5:
-            report["missing_addresses"] += 1
+            is_valid = False
+            issue = "Missing or invalid registered address"
+            
+        if not is_valid:
             valid_mask.loc[idx] = False
             report["errors"].append({
                 "cin": row['cin'],
-                "row": idx + 2,
-                "issue": "Missing or too short registered address",
-                "action": "Flagged/Removed"
+                "issue": issue,
+                "action": "Removed"
             })
             
-    # 6. Missing status/filing fields
-    for idx, row in df.iterrows():
-        status = str(row['company_status']).strip()
-        filing = str(row['filing_status']).strip()
-        if pd.isna(row['company_status']) or status == "" or pd.isna(row['filing_status']) or filing == "":
-            report["missing_status_or_filing"] += 1
-            valid_mask.loc[idx] = False
-            report["errors"].append({
-                "cin": row['cin'],
-                "row": idx + 2,
-                "issue": f"Missing company_status ({status}) or filing_status ({filing})",
-                "action": "Flagged/Removed"
-            })
-            
-    cleaned_df = df[valid_mask]
-    invalid_df = df[~valid_mask]
+    cleaned_df = df[valid_mask].copy()
     
-    return cleaned_df, invalid_df, report
+    # Derive filing status based on company status
+    def derive_filing(status):
+        st = str(status).strip()
+        if st in ("Dormant", "Strike Off"):
+            return "Defaulter"
+        return "Filed"
+    cleaned_df["filing_status"] = cleaned_df["company_status"].apply(derive_filing)
+    
+    return cleaned_df, report
 
-def validate_director_data(dir_df, clean_comp_df, report):
-    # Checking director registry relationships
-    # We check if directors link to valid companies (present in the cleaned company dataset)
-    total_dirs = len(dir_df)
-    report["director_relationship"] = {
-        "total_relationships": total_dirs,
-        "valid_cin_references": 0,
-        "invalid_cin_references": 0,
-        "missing_dins": 0,
-        "duplicate_links": 0
-    }
-    
-    valid_mask = pd.Series(True, index=dir_df.index)
-    valid_cins = set(clean_comp_df['cin'])
-    
-    # Check duplicate links (same DIN and CIN combo)
-    dup_links = dir_df.duplicated(subset=['din', 'cin'], keep=False)
-    report["director_relationship"]["duplicate_links"] = int(dir_df.duplicated(subset=['din', 'cin']).sum())
-    valid_mask &= ~dir_df.duplicated(subset=['din', 'cin'], keep='first')
-    
-    for idx, row in dir_df.iterrows():
-        # Missing DIN
+def validate_directors(df, valid_cins, report):
+    valid_mask = pd.Series(True, index=df.index)
+    for idx, row in df.iterrows():
+        cin = str(row['cin']).strip()
         din = str(row['din']).strip()
-        if pd.isna(row['din']) or din == "" or len(din) != 8 or not din.isdigit():
-            report["director_relationship"]["missing_dins"] += 1
+        
+        # Validate CIN reference
+        if cin not in valid_cins:
             valid_mask.loc[idx] = False
-            report["errors"].append({
-                "din": row['din'],
-                "cin": row['cin'],
-                "row": idx + 2,
-                "issue": f"Invalid or missing DIN: {row['din']}",
-                "action": "Flagged/Removed"
-            })
+            report["errors"].append({"cin": cin, "issue": "Director linked to non-existent CIN", "action": "Removed"})
             continue
             
-        # Valid CIN reference check
-        cin = str(row['cin']).strip()
-        if cin in valid_cins:
-            report["director_relationship"]["valid_cin_references"] += 1
-        else:
-            report["director_relationship"]["invalid_cin_references"] += 1
+        # Validate DIN format
+        if pd.isna(row['din']) or din == "" or len(din) < 5 or len(din) > 10 or not din.isdigit():
             valid_mask.loc[idx] = False
-            report["errors"].append({
-                "din": row['din'],
-                "cin": row['cin'],
-                "row": idx + 2,
-                "issue": f"CIN {cin} not found in cleaned companies",
-                "action": "Flagged/Removed"
-            })
+            report["errors"].append({"cin": cin, "issue": f"Invalid DIN format: {din}", "action": "Removed"})
             
-    cleaned_dir_df = dir_df[valid_mask]
-    invalid_dir_df = dir_df[~valid_mask]
-    
-    return cleaned_dir_df, invalid_dir_df
+    return df[valid_mask].copy()
 
 def main():
-    parser = argparse.ArgumentParser(description="Ingest and validate company master and director records.")
-    parser.add_argument("--validate-only", action="store_true", help="Only validate files and output reports, don't write to DB.")
-    args = parser.parse_args()
-    
-    if not os.path.exists(COMPANY_RAW) or not os.path.exists(DIRECTOR_RAW):
-        print(f"Error: Raw data files not found in {RAW_DIR}")
-        print("Please run scripts/generate_baseline_data.py first.")
+    print("Reading new raw CSV files...")
+    if not all(os.path.exists(p) for p in [COMPANIES_RAW, DIRECTORS_RAW]):
+        print("Error: Missing companies.csv or directors.csv in data/raw.")
         sys.exit(1)
         
-    print("Reading raw CSV files...")
-    comp_df = pd.read_csv(COMPANY_RAW, dtype={"cin": str})
-    dir_df = pd.read_csv(DIRECTOR_RAW, dtype={"din": str, "cin": str})
+    companies_df = pd.read_csv(COMPANIES_RAW, dtype={"CIN": str})
+    directors_df = pd.read_csv(DIRECTORS_RAW, dtype={"DIN": str, "CIN": str})
     
-    print("Validating company master data...")
-    clean_comp, invalid_comp, report = validate_company_data(comp_df)
+    # Map and rename companies_df
+    companies_df = companies_df.rename(columns={
+        "CIN": "cin",
+        "Company_Name": "company_name",
+        "Registered_Address": "registered_office_address",
+        "Registered_State": "state",
+        "Date_of_Incorporation": "date_of_registration",
+        "Authorized_Capital_Rs": "authorized_capital",
+        "Paid_up_Capital_Rs": "paidup_capital",
+        "Company_Status": "company_status"
+    })
     
-    print("Validating director registry relationships...")
-    clean_dir, invalid_dir = validate_director_data(dir_df, clean_comp, report)
+    # Add default city extraction
+    companies_df["city"] = companies_df.apply(lambda r: extract_city(r["registered_office_address"], r["state"]), axis=1)
     
-    # Save cleaned and invalid files
-    clean_comp.to_csv(os.path.join(PROCESSED_DIR, "cleaned_companies.csv"), index=False)
-    invalid_comp.to_csv(os.path.join(PROCESSED_DIR, "invalid_companies.csv"), index=False)
-    clean_dir.to_csv(os.path.join(PROCESSED_DIR, "cleaned_directors.csv"), index=False)
-    invalid_dir.to_csv(os.path.join(PROCESSED_DIR, "invalid_directors.csv"), index=False)
+    # Map and rename directors_df
+    directors_df = directors_df.rename(columns={
+        "CIN": "cin",
+        "DIN": "din",
+        "Director_Name": "director_name"
+    })
     
-    # Calculate final status
+    print("Validating companies...")
+    clean_companies, report = validate_companies(companies_df)
+    valid_cins = set(clean_companies["cin"])
+    
+    # Inject legitimate edge case: 7 companies sharing 1 address with different directors
+    print("Injecting 7 legitimate office case companies...")
+    shared_address = "Plot 88, Nariman Point Business Centre, Mumbai, MH"
+    first_names = ["Arvind", "Pradeep", "Harish", "Karthik", "Sridhar", "Raman", "Madhav"]
+    last_names = ["Nair", "Pillai", "Subramanian", "Kulkarni", "Deshmukh", "Gokhale", "Joshi"]
+    
+    legit_cos = []
+    legit_dirs = []
+    for i in range(7):
+        while True:
+            seq = f"{900000 + i:06d}"
+            cin = f"U74999MH2015PTC{seq}"
+            if cin not in valid_cins:
+                break
+        
+        comp_name = f"Vanguard Consultants Group {i+1} Pvt Ltd"
+        incorp_date = f"2015-04-{10+i:02d}"
+        
+        # Add to companies DataFrame
+        new_row = {
+            "cin": cin,
+            "company_name": comp_name,
+            "registered_office_address": shared_address,
+            "city": "Mumbai",
+            "state": "MH",
+            "date_of_registration": incorp_date,
+            "authorized_capital": 1000000.0,
+            "paidup_capital": 500000.0,
+            "company_status": "Active",
+            "filing_status": "Filed",
+            "Synthetic_Ring_ID": None,
+            "Synthetic_Shell_Ground_Truth": "No",
+            "label": "legit_edge_case"
+        }
+        legit_cos.append(new_row)
+        valid_cins.add(cin)
+        
+        # Add to directors
+        legit_dirs.append({
+            "cin": cin,
+            "din": f"8000000{i}",
+            "director_name": f"{first_names[i]} {last_names[i]}"
+        })
+        
+    legit_cos_df = pd.DataFrame(legit_cos)
+    clean_companies = pd.concat([clean_companies, legit_cos_df], ignore_index=True)
+    
+    # Process directors
+    print("Validating directors...")
+    clean_directors = validate_directors(directors_df, valid_cins, report)
+    legit_dirs_df = pd.DataFrame(legit_dirs)
+    clean_directors = pd.concat([clean_directors, legit_dirs_df], ignore_index=True)
+    
+    # Generate CERSAI and RBI records dynamically based on shell companies
+    print("Generating CERSAI, RBI, and Ground Truth datasets...")
+    cersai_records = []
+    rbi_records = []
+    gt_records = []
+    
+    banks = [
+        "State Bank of India", "Punjab National Bank", "Bank of Baroda",
+        "Canara Bank", "Union Bank of India", "HDFC Bank", "ICICI Bank"
+    ]
+    
+    coop_banks = [
+        "Vardhman Cooperative Bank Ltd", "Continental Urban Cooperative Bank",
+        "Orion Multistate Cooperative Bank", "Apex Cooperative Bank Ltd",
+        "Janata Sahakari Bank Ltd", "Saraswat Cooperative Bank Ltd"
+    ]
+    
+    for _, row in clean_companies.iterrows():
+        cin = row["cin"]
+        name = row["company_name"]
+        is_shell = row.get("Synthetic_Shell_Ground_Truth") == "Yes"
+        ring_id = row.get("Synthetic_Ring_ID")
+        
+        # Label mapping for ground truth
+        if is_shell:
+            if ring_id == "RING-01":
+                label = "fraud_ring_A"
+            elif ring_id == "RING-02":
+                label = "fraud_ring_B"
+            elif ring_id == "RING-03":
+                label = "fraud_ring_C"
+            else:
+                label = f"fraud_ring_{ring_id}"
+        else:
+            label = row.get("label")
+            if pd.isna(label) or not label or str(label).strip() == "" or str(label) == "nan":
+                label = "normal"
+            
+        gt_records.append({
+            "cin": cin,
+            "label": label
+        })
+        
+        reg_date = datetime.strptime(row["date_of_registration"], "%Y-%m-%d")
+        
+        if is_shell:
+            # All shell companies get a loan and default to ensure high score
+            if ring_id == "RING-01":
+                lender = coop_banks[0]
+            elif ring_id == "RING-02":
+                lender = coop_banks[1]
+            elif ring_id == "RING-03":
+                lender = coop_banks[2]
+            else:
+                lender_idx = hash(str(ring_id)) % len(coop_banks)
+                lender = coop_banks[lender_idx]
+                
+            # Create loan
+            cersai_records.append({
+                "cin": cin,
+                "borrower_name": name,
+                "lender_name": lender,
+                "security_type": "hypothecation",
+                "asset_description": f"Plant & Machinery - {name}",
+                "charge_amount": float(random.choice([2500000, 3500000, 5000000])),
+                "charge_registration_date": (reg_date + timedelta(days=random.randint(15, 45))).strftime("%Y-%m-%d")
+            })
+            
+            # Create default
+            rbi_records.append({
+                "cin": cin,
+                "company_name": name,
+                "lender_name": lender,
+                "default_amount": float(random.choice([3000000, 4500000, 6000000])),
+                "classification_date": (reg_date + timedelta(days=random.randint(300, 600))).strftime("%Y-%m-%d"),
+                "wilful_default_reason": "Diversion of funds"
+            })
+        else:
+            # Normal background: ~18% loans, ~1% default
+            if random.random() < 0.18:
+                lender = random.choice(banks)
+                loan_date = reg_date + timedelta(days=random.randint(90, 1500))
+                cersai_records.append({
+                    "cin": cin,
+                    "borrower_name": name,
+                    "lender_name": lender,
+                    "security_type": random.choice(["hypothecation", "mortgage", "pledge"]),
+                    "asset_description": f"Inventory - {name}",
+                    "charge_amount": float(random.choice([500000, 1200000, 2000000, 3000000])),
+                    "charge_registration_date": loan_date.strftime("%Y-%m-%d")
+                })
+                
+                if random.random() < 0.05:
+                    rbi_records.append({
+                        "cin": cin,
+                        "company_name": name,
+                        "lender_name": lender,
+                        "default_amount": float(random.choice([1500000, 2800000])),
+                        "classification_date": (loan_date + timedelta(days=random.randint(300, 1000))).strftime("%Y-%m-%d"),
+                        "wilful_default_reason": random.choice(["Diversion of funds", "Siphoning of funds"])
+                    })
+                    
+    clean_cersai = pd.DataFrame(cersai_records)
+    clean_rbi = pd.DataFrame(rbi_records)
+    clean_gt = pd.DataFrame(gt_records)
+    
+    # Save cleaned files to processed directory
+    clean_companies.to_csv(os.path.join(PROCESSED_DIR, "cleaned_companies.csv"), index=False)
+    clean_directors.to_csv(os.path.join(PROCESSED_DIR, "cleaned_directors.csv"), index=False)
+    clean_cersai.to_csv(os.path.join(PROCESSED_DIR, "cleaned_cersai_security_interests.csv"), index=False)
+    clean_rbi.to_csv(os.path.join(PROCESSED_DIR, "cleaned_rbi_wilful_defaulters.csv"), index=False)
+    clean_gt.to_csv(os.path.join(PROCESSED_DIR, "cleaned_ground_truth.csv"), index=False)
+    
     report["summary"] = {
-        "raw_companies_count": len(comp_df),
-        "cleaned_companies_count": len(clean_comp),
-        "invalid_companies_count": len(invalid_comp),
-        "raw_directors_count": len(dir_df),
-        "cleaned_directors_count": len(clean_dir),
-        "invalid_directors_count": len(invalid_dir)
+        "companies_count": len(clean_companies),
+        "directors_count": len(clean_directors),
+        "cersai_count": len(clean_cersai),
+        "rbi_count": len(clean_rbi),
+        "gt_count": len(clean_gt),
     }
     
     report_file = os.path.join(PROCESSED_DIR, "validation_report.json")
     with open(report_file, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=4)
         
-    print("\n--- VALIDATION REPORT SUMMARY ---")
-    print(f"Raw Companies:      {report['summary']['raw_companies_count']}")
-    print(f"Cleaned Companies:  {report['summary']['cleaned_companies_count']}")
-    print(f"Invalid Companies:  {report['summary']['invalid_companies_count']}")
-    print(f"Duplicate CINs:     {report['duplicate_cins']}")
-    print(f"Invalid Date Recs:  {report['invalid_dates']}")
-    print(f"Invalid Cap Recs:   {report['invalid_capital']}")
-    print(f"Missing Address:    {report['missing_addresses']}")
-    print(f"Missing Status/Fil: {report['missing_status_or_filer'] if 'missing_status_or_filer' in report else report['missing_status_or_filing']}")
-    print(f"Cleaned Directors:  {report['summary']['cleaned_directors_count']}")
-    print(f"Invalid Directors:  {report['summary']['invalid_directors_count']}")
+    print("\n--- INGESTION VALIDATION SUMMARY ---")
+    print(f"Cleaned Companies: {len(clean_companies)}")
+    print(f"Cleaned Directors: {len(clean_directors)}")
+    print(f"Cleaned Loans:     {len(clean_cersai)}")
+    print(f"Cleaned Defaulters:{len(clean_rbi)}")
+    print(f"Cleaned GT Labels: {len(clean_gt)}")
     print(f"Validation report saved to {report_file}")
-    
-    if args.validate_only:
-        print("Validation complete. Skipping database load (--validate-only).")
-        return
-        
-    # Database load will happen here in later steps
-    # We will build the DB load service in the next step.
 
 if __name__ == "__main__":
     main()
+

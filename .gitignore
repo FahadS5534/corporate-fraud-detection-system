@@ -163,3 +163,6 @@ data/raw/company_master.csv
 data/raw/director_registry.csv
 data/processed/*.csv
 data/processed/*.json
+
+# Model artifacts
+artifacts/
