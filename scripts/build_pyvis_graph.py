@@ -29,6 +29,42 @@ def build_interactive_html():
         if v in high_risk_companies:
             nodes_to_keep.add(u)
 
+    # Build subgraph for Louvain community layout
+    subgraph = graph.subgraph(nodes_to_keep).copy()
+    from networkx.algorithms.community import louvain_communities
+    import math
+
+    communities_sets = louvain_communities(subgraph, seed=42)
+    valid_communities = [list(c) for c in communities_sets if len(c) > 0]
+    valid_communities.sort(key=len, reverse=True)
+    
+    num_communities = len(valid_communities)
+    node_coords = {}
+    
+    # Global arrangement of community centers in a ring
+    global_radius = 1600
+    for c_idx, comm in enumerate(valid_communities):
+        theta_c = 2.0 * math.pi * c_idx / max(1, num_communities)
+        center_x = global_radius * math.cos(theta_c)
+        center_y = global_radius * math.sin(theta_c)
+        
+        # Sort nodes: companies first, then directors, then addresses, then lenders
+        def node_sort_key(nid):
+            nt = subgraph.nodes[nid].get("type", "")
+            order = {"company": 0, "director": 1, "address": 2, "lender": 3}
+            return order.get(nt, 4)
+            
+        comm.sort(key=node_sort_key)
+        
+        # Place nodes of community in local circle around the community center
+        num_nodes = len(comm)
+        comm_radius = 220 + 10 * num_nodes
+        for n_idx, nid in enumerate(comm):
+            theta_n = 2.0 * math.pi * n_idx / max(1, num_nodes)
+            x = center_x + comm_radius * math.cos(theta_n)
+            y = center_y + comm_radius * math.sin(theta_n)
+            node_coords[nid] = (x, y)
+
     nodes = []
     edges = []
     
@@ -73,6 +109,7 @@ def build_interactive_html():
             size = 12
             title = name
             
+        x, y = node_coords.get(node_id, (0.0, 0.0))
         nodes.append({
             "id": node_id,
             "label": name if ntype != "address" else (node_id[:25] + "..."),
@@ -80,6 +117,8 @@ def build_interactive_html():
             "size": size,
             "title": title,
             "group": ntype,
+            "x": x,
+            "y": y,
             "properties": {k: str(v) for k, v in data.items()}
         })
         
@@ -328,6 +367,7 @@ def build_interactive_html():
                 }}
             }},
             physics: {{
+                enabled: false,
                 solver: 'barnesHut',
                 barnesHut: {{
                     gravitationalConstant: -2000,
@@ -338,9 +378,7 @@ def build_interactive_html():
                     avoidOverlap: 0.5
                 }},
                 stabilization: {{
-                    enabled: true,
-                    iterations: 50,
-                    updateInterval: 10
+                    enabled: false
                 }}
             }},
             groups: {{
