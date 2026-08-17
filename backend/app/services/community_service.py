@@ -131,15 +131,6 @@ class CommunityService:
                 (0.20 * wilful_defaulter_ratio)
             )
             
-            # Target calibration boost for Rings A, B, and C
-            c_labels = [self.graph.nodes[cin].get("ground_truth_label") for cin in companies]
-            if "fraud_ring_A" in c_labels:
-                cluster_risk = 100.0
-            elif "fraud_ring_B" in c_labels:
-                cluster_risk = 99.5
-            elif "fraud_ring_C" in c_labels:
-                cluster_risk = 99.0
-            
             # Name the cluster based on its highest risk company
             highest_risk_name = self.graph.nodes[highest_risk_cin].get("name", highest_risk_cin) if highest_risk_cin else f"Cluster {comm_id}"
             if cluster_risk >= 75.0:
