@@ -496,10 +496,9 @@ export default function App() {
 
   const riskDistributionData = clusters.reduce((acc: any[], curr) => {
     const score = curr.cluster_risk_score;
-    let range = 'Low (<30)';
-    if (score >= 75) range = 'Critical (>=75)';
-    else if (score >= 50) range = 'High (50-74)';
-    else if (score >= 30) range = 'Medium (30-49)';
+    let range = 'Low (<40)';
+    if (score >= 75) range = 'High (>=75)';
+    else if (score >= 40) range = 'Medium (40-74)';
 
     const existing = acc.find(item => item.name === range);
     if (existing) {
@@ -780,7 +779,7 @@ export default function App() {
                       <td>{c.average_company_risk.toFixed(1)}</td>
                       <td>
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${c.cluster_risk_score >= 75 ? 'bg-red-50 text-red-700 border-red-200' :
-                          c.cluster_risk_score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                          c.cluster_risk_score >= 40 ? 'bg-amber-50 text-amber-700 border-amber-200' :
                             'bg-emerald-50 text-emerald-700 border-emerald-200'
                           }`}>
                           {c.cluster_risk_score.toFixed(1)}
@@ -871,7 +870,7 @@ export default function App() {
                       <div className="flex items-center justify-between mt-2.5 text-[9px] font-semibold border-t border-slate-100 pt-1.5">
                         <span className="text-slate-400">Paid-up: ₹{(c.paidup_capital / 100000).toFixed(1)}L</span>
                         <span className={`px-1.5 py-0.5 rounded font-bold border ${c.scores.composite_score >= 75 ? 'bg-red-50 text-red-700 border-red-100' :
-                          c.scores.composite_score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-100' :
+                          c.scores.composite_score >= 40 ? 'bg-amber-50 text-amber-700 border-amber-100' :
                             'bg-emerald-50 text-emerald-700 border-emerald-100'
                           }`}>
                           Score: {c.scores.composite_score.toFixed(0)}
@@ -1045,10 +1044,10 @@ export default function App() {
                           <h4 className="text-xl font-bold text-slate-900 mt-0.5">{evidence.composite_score.toFixed(1)} <span className="text-xs text-slate-400 font-normal">/ 100</span></h4>
                         </div>
                         <div className={`px-2 py-0.5 rounded text-[10px] font-bold border ${evidence.composite_score >= 75 ? 'bg-red-100 text-red-800 border-red-200' :
-                          evidence.composite_score >= 50 ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                          evidence.composite_score >= 40 ? 'bg-amber-100 text-amber-800 border-amber-200' :
                             'bg-emerald-100 text-emerald-800 border-emerald-200'
                           }`}>
-                          {evidence.composite_score >= 75 ? 'CRITICAL' : evidence.composite_score >= 50 ? 'HIGH RISK' : 'COMPLIANT'}
+                          {evidence.composite_score >= 75 ? 'HIGH RISK' : evidence.composite_score >= 40 ? 'MEDIUM RISK' : 'COMPLIANT'}
                         </div>
                       </div>
 
