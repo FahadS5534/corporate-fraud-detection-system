@@ -1,10 +1,11 @@
 import os
 import sys
+import secrets
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal, Optional
 
 # Add root folder to sys.path
 sys.path.append(r"f:\SIH")
@@ -120,7 +121,7 @@ def get_dashboard_summary():
     num_addresses = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "address")
     num_lenders = sum(1 for n, d in COMBINED_GRAPH.nodes(data=True) if d.get("type") == "lender")
     
-    high_risk_clusters = sum(1 for c in CLUSTERS if c["cluster_risk_score"] >= 75.0)
+    high_risk_clusters = sum(1 for c in CLUSTERS if c["risk_category"] == "Critical Risk")
     
     return {
         "total_companies": num_companies,
@@ -154,7 +155,9 @@ def get_all_clusters():
             "average_company_risk": c["average_company_risk"],
             "date_spread_days": c["date_spread_days"],
             "network_density": c["network_density"],
-            "cluster_risk_score": c["cluster_risk_score"]
+            "cluster_risk_score": c["cluster_risk_score"],
+            "risk_category": c["risk_category"],
+            "risk_breakdown": c["risk_breakdown"],
         })
     return summary_clusters
 
@@ -351,3 +354,144 @@ def get_evaluation_metrics():
         "false_positive_rate_pct": false_positive_rate,
         "status": status
     }
+
+# --- MCA LIVE FEED INGESTION FOR DEMO ---
+from pydantic import BaseModel
+from datetime import date as dt_date
+from fastapi.security import APIKeyHeader
+from fastapi import Security
+
+API_KEY_NAME = "X-Investigator-Token"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+def verify_investigator_token(api_key: str = Security(api_key_header)):
+    expected_token = os.getenv("INVESTIGATOR_TOKEN", "SFIO_SECRET_INVESTIGATOR_KEY")
+    if not api_key or not expected_token or api_key != expected_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Could not validate credentials: X-Investigator-Token header missing or invalid"
+        )
+    return api_key
+
+class DirectorChangeEvent(BaseModel):
+    cin: str
+    din: str
+    director_name: str
+    event_type: Literal["APPOINTMENT", "RESIGNATION"]
+    effective_date: Optional[dt_date] = None
+
+class InvestigatorLoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/api/auth/login")
+def investigator_login(credentials: InvestigatorLoginRequest):
+    expected_username = os.getenv("DEMO_INVESTIGATOR_USERNAME", "demo.investigator")
+    expected_password = os.getenv("DEMO_INVESTIGATOR_PASSWORD", "SFIO_DEMO_2026")
+
+    if not (
+        secrets.compare_digest(credentials.username, expected_username)
+        and secrets.compare_digest(credentials.password, expected_password)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid investigator credentials")
+
+    return {
+        "authenticated": True,
+        "investigator": {
+            "username": expected_username,
+            "display_name": "Demo Investigator"
+        },
+        "token": os.getenv("INVESTIGATOR_TOKEN", "SFIO_SECRET_INVESTIGATOR_KEY")
+    }
+
+@app.post("/api/mca-feed/director-change")
+def ingest_director_change(
+    event: DirectorChangeEvent,
+    db: Session = Depends(get_db),
+    authorized: str = Depends(verify_investigator_token)
+):
+    """
+    Ingest real-time director changes with verified investigator authentication.
+    Applies live graph recalculations to block resignation loopholes.
+    """
+    global G_SERVICE, COMBINED_GRAPH, CLUSTERS
+
+    company = db.query(Company).filter(Company.cin == event.cin).one_or_none()
+    if company is None:
+        raise HTTPException(status_code=404, detail=f"Company {event.cin} not found")
+    
+    # 1. Update/Insert in SQLite DB
+    rel = db.query(DirectorRelationship).filter(
+        DirectorRelationship.cin == event.cin,
+        DirectorRelationship.din == event.din
+    ).first()
+    
+    is_active = event.event_type == "APPOINTMENT"
+    eff_date = event.effective_date or dt_date.today()
+    
+    if not rel:
+        # Create new record
+        rel = DirectorRelationship(
+            cin=event.cin,
+            din=event.din,
+            director_name=event.director_name,
+            appointment_date=eff_date if is_active else None,
+            resignation_date=None if is_active else eff_date,
+            is_active=is_active
+        )
+        db.add(rel)
+    else:
+        # Update existing record
+        rel.is_active = is_active
+        if is_active:
+            rel.appointment_date = eff_date
+            rel.resignation_date = None
+        else:
+            rel.resignation_date = eff_date
+            
+    db.commit()
+    db.refresh(rel)
+    
+    # 2. Update the in-memory NetworkX Graph incrementally
+    if G_SERVICE is not None and COMBINED_GRAPH is not None:
+        try:
+            G_SERVICE.add_director_relationship_incrementally(
+                cin=event.cin,
+                din=event.din,
+                director_name=event.director_name,
+                is_active=is_active,
+                resignation_date=rel.resignation_date
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        
+        # 3. Re-run community detection to update the global cache and score rankings
+        comm_service = CommunityService(COMBINED_GRAPH, SCORE_ENGINE)
+        CLUSTERS = comm_service.detect_communities()
+        
+    return {
+        "success": True,
+        "message": f"Successfully processed {event.event_type} for director {event.director_name} ({event.din}) on company {event.cin}.",
+        "relationship": {
+            "cin": rel.cin,
+            "din": rel.din,
+            "director_name": rel.director_name,
+            "is_active": rel.is_active,
+            "resignation_date": str(rel.resignation_date) if rel.resignation_date else None
+        }
+    }
+
+@app.get("/api/mca-feed/reset-graph")
+def reset_graph(
+    db: Session = Depends(get_db),
+    authorized: str = Depends(verify_investigator_token)
+):
+    """
+    Reset the combined graph in-memory by rebuilding it from the database.
+    """
+    global COMBINED_GRAPH, CLUSTERS
+    if G_SERVICE is not None:
+        COMBINED_GRAPH = G_SERVICE.build_graph()
+        comm_service = CommunityService(COMBINED_GRAPH, SCORE_ENGINE)
+        CLUSTERS = comm_service.detect_communities()
+    return {"success": True, "message": "Graph rebuilt successfully from DB."}

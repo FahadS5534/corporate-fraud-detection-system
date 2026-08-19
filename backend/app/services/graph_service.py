@@ -1,7 +1,9 @@
 import os
 import sys
 import re
+import math
 import networkx as nx
+from datetime import date
 from sqlalchemy.orm import Session
 
 # Add root folder to sys.path
@@ -114,7 +116,7 @@ class GraphService:
                         longitude=lng
                     )
                 # Add edge: Company is REGISTERED_AT Address
-                self.graph.add_edge(comp.cin, norm_addr, relation="REGISTERED_AT")
+                self.graph.add_edge(comp.cin, norm_addr, relation="REGISTERED_AT", weight=1.0)
 
         # 2. Fetch all director relationships
         relations = self.db.query(DirectorRelationship).all()
@@ -129,7 +131,21 @@ class GraphService:
                     name=rel.director_name
                 )
             if self.graph.has_node(rel.cin):
-                self.graph.add_edge(din, rel.cin, relation="DIRECTOR_OF")
+                # Calculate edge weight based on active status and resignation date
+                if not bool(rel.is_active) and rel.resignation_date:
+                    years_since = (date.today() - rel.resignation_date).days / 365.25
+                    weight = math.exp(-0.5 * max(0.0, years_since))
+                else:
+                    weight = 1.0
+                self.graph.add_edge(
+                    din,
+                    rel.cin,
+                    relation="DIRECTOR_OF",
+                    weight=weight,
+                    is_active=bool(rel.is_active),
+                    appointment_date=rel.appointment_date.isoformat() if rel.appointment_date else None,
+                    resignation_date=rel.resignation_date.isoformat() if rel.resignation_date else None,
+                )
 
         # 3. Fetch all CERSAI Loans (Lenders)
         loans = self.db.query(CersaiSecurityInterest).all()
@@ -144,7 +160,7 @@ class GraphService:
                     name=lender
                 )
             if self.graph.has_node(loan.cin):
-                self.graph.add_edge(loan.cin, lender, relation="LENDER_OF")
+                self.graph.add_edge(loan.cin, lender, relation="LENDER_OF", weight=1.0)
 
         # 4. Fetch all RBI Defaulters
         defaulters = self.db.query(RbiWilfulDefaulter).all()
@@ -201,6 +217,65 @@ class GraphService:
             })
             
         return elements
+
+    def add_director_relationship_incrementally(self, cin, din, director_name, is_active=True, resignation_date=None):
+        """
+        Dynamically adds/updates a director relationship in the NetworkX graph in-memory.
+        """
+        # 1. Add/Update Director node
+        if not self.graph.has_node(din):
+            self.graph.add_node(din, type="director", name=director_name)
+        else:
+            self.graph.nodes[din]["name"] = director_name
+        
+        # 2. Add/Update edge
+        if not self.graph.has_node(cin):
+            company = self.db.query(Company).filter(Company.cin == cin).one_or_none()
+            if company is None:
+                raise ValueError(f"Company {cin} does not exist")
+            norm_addr = normalize_address(company.registered_office_address)
+            self.graph.add_node(
+                cin,
+                type="company",
+                name=company.company_name,
+                status=company.company_status,
+                incorporation_date=company.date_of_registration.isoformat() if company.date_of_registration else "",
+                authorized_capital=float(company.authorized_capital),
+                paidup_capital=float(company.paidup_capital),
+                filing_status=company.filing_status,
+                wilful_defaulter_flag=False,
+                ground_truth_label="normal",
+            )
+            if norm_addr:
+                if not self.graph.has_node(norm_addr):
+                    lat, lng = geocode_address_offline(norm_addr)
+                    self.graph.add_node(
+                        norm_addr,
+                        type="address",
+                        raw_address=company.registered_office_address,
+                        latitude=lat,
+                        longitude=lng,
+                    )
+                self.graph.add_edge(cin, norm_addr, relation="REGISTERED_AT", weight=1.0)
+
+        if not self.graph.has_node(cin):
+            raise ValueError(f"Company {cin} does not exist")
+
+        if not is_active and resignation_date:
+            years_since = (date.today() - resignation_date).days / 365.25
+            weight = math.exp(-0.5 * max(0.0, years_since))
+        else:
+            weight = 1.0
+
+        self.graph.add_edge(
+            din,
+            cin,
+            relation="DIRECTOR_OF",
+            weight=weight,
+            is_active=bool(is_active),
+            resignation_date=resignation_date.isoformat() if resignation_date else None,
+        )
+        print(f"GraphService: Incrementally updated relationship {din} -> {cin} with weight={weight}")
 
     def close(self):
         self.db.close()
