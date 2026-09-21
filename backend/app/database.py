@@ -1,15 +1,13 @@
 import os
+from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# Default to SQLite fallback. If f:\SIH exists, use local absolute path, otherwise use container-relative path.
-if os.path.exists("f:\\SIH"):
-    DEFAULT_SQLITE_URL = "sqlite:///f:/SIH/data/sih_fraud_detection.db"
-    os.makedirs(r"f:\SIH\data", exist_ok=True)
-else:
-    DEFAULT_SQLITE_URL = "sqlite:///data/sih_fraud_detection.db"
-    os.makedirs("data", exist_ok=True)
+# Resolve the seeded database from the repository root. This keeps the data
+# available in a Vercel function bundle, whose filesystem is read-only.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SQLITE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'sih_fraud_detection.db').as_posix()}"
 
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
 

@@ -495,3 +495,8 @@ def reset_graph(
         comm_service = CommunityService(COMBINED_GRAPH, SCORE_ENGINE)
         CLUSTERS = comm_service.detect_communities()
     return {"success": True, "message": "Graph rebuilt successfully from DB."}
+# On Vercel, FastAPI promotes this built SPA and the mounted static files to
+# the CDN. Locally, Vite continues to serve the frontend during development.
+FRONTEND_DIST = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "frontend", "dist")
+if os.path.isdir(FRONTEND_DIST):
+    app.frontend("/", directory=FRONTEND_DIST)
