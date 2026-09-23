@@ -1204,7 +1204,7 @@ export default function App() {
               <p className="text-[12px] tracking-wide text-slate-100">© Copyright <span className="font-extrabold text-white">Ministry of Corporate Affairs</span>, Government of India. All Rights Reserved.</p>
               <p className="text-[12px] tracking-wide text-slate-100">This site is best viewed at a screen resolution of 1366x768 using the latest versions of Chrome, Firefox, Safari, or Microsoft Edge.</p>
               <a href="#" className="text-[12px] hover:underline underline-offset-4 tracking-wide text-white">Disclaimer</a>
-              <p className="text-[12px] mt-2 text-slate-100 tracking-wide pt-1">Last Updated: 14 August, 2026</p>
+              <p className="text-[12px] mt-2 text-slate-100 tracking-wide pt-1">Last Updated: 23 September, 2026</p>
             </div>
 
             <div className="flex flex-col items-center md:items-start justify-start md:pl-12 mt-8 md:mt-1 min-w-[200px]">
