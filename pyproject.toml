@@ -1,2 +1,18 @@
+[project]
+name = "mca21-risk-intelligence"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.110.0",
+  "uvicorn>=0.28.0",
+  "pydantic>=2.6.0",
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "scipy>=1.12.0",
+  "networkx>=3.2.0",
+  "python-louvain>=0.16",
+  "sqlalchemy>=2.0.0"
+]
+
 [tool.vercel]
 entrypoint = "backend.app.main:app"
