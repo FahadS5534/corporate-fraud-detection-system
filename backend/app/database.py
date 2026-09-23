@@ -4,21 +4,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# Vercel functions have an ephemeral, read-only deployment filesystem. This app
-# only reads its pre-seeded database at runtime, so point SQLAlchemy at the
-# bundled database in read-only URI mode when running there.
+# Resolve the seeded database from the repository root. This keeps the data
+# available in a Vercel function bundle, whose filesystem is read-only.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATABASE_PATH = (PROJECT_ROOT / "data" / "sih_fraud_detection.db").as_posix()
 if os.environ.get("VERCEL") == "1":
-    repo_root = Path(__file__).resolve().parents[2]
-    database_path = (repo_root / "data" / "sih_fraud_detection.db").as_posix()
-    DEFAULT_SQLITE_URL = f"sqlite:///file:{database_path}?mode=ro&uri=true"
-elif os.path.exists("f:\\SIH"):
-    # Local Windows development path used by the original project setup.
-    DEFAULT_SQLITE_URL = "sqlite:///f:/SIH/data/sih_fraud_detection.db"
-    os.makedirs(r"f:\SIH\data", exist_ok=True)
+    DEFAULT_SQLITE_URL = f"sqlite:///file:{DATABASE_PATH}?mode=ro&uri=true"
 else:
-    # Local development and container-relative fallback.
-    DEFAULT_SQLITE_URL = "sqlite:///data/sih_fraud_detection.db"
-    os.makedirs("data", exist_ok=True)
+    DEFAULT_SQLITE_URL = f"sqlite:///{DATABASE_PATH}"
 
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
 

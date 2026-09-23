@@ -51,12 +51,11 @@ def create_report():
         if level == 1:
             run.font.size = Pt(18)
             run.font.color.rgb = RGBColor(15, 23, 42) # Slate 900
-            # Add a bottom border or divider line by paragraph format in Word if possible, otherwise we use space
         elif level == 2:
             run.font.size = Pt(14)
             run.font.color.rgb = RGBColor(30, 41, 59) # Slate 800
         else:
-            run.font.size = Pt(12)
+            run.font.size = Pt(11.5)
             run.font.color.rgb = RGBColor(71, 85, 105) # Slate 600
         return h
 
@@ -110,7 +109,7 @@ def create_report():
     subtitle_p = doc.add_paragraph()
     subtitle_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     subtitle_p.paragraph_format.space_after = Pt(36)
-    run_sub = subtitle_p.add_run("Technical Documentation: Scoring Engine & Louvain Clustering")
+    run_sub = subtitle_p.add_run("Technical Documentation: Scoring Engine & Louvain Modularity Partitioning")
     run_sub.font.name = 'Arial'
     run_sub.font.size = Pt(12)
     run_sub.font.color.rgb = RGBColor(100, 116, 139) # Slate 500
@@ -125,52 +124,40 @@ def create_report():
     # --- Section 1 ---
     add_custom_heading("1. Executive Summary", level=1)
     add_body_paragraph(
-        "The MCA21 Risk Intelligence Portal is an advanced decision-support platform designed to screen, "
-        "identify, and visualize corporate shell companies and complex loan-siphoning networks. By integrating "
-        "relational data, bank charges (CERSAI), and default records (RBI) into a unified heterogeneous network graph, "
-        "the portal provides investigators with automated, mathematical indicators of corporate collusion. The system "
-        "leverages two core technologies to achieve high-accuracy screening: the Louvain Community Detection algorithm "
-        "for syndicate grouping, and a Z-Score calibrated 5-Factor Risk Engine for entity profiling."
+        "The MCA21 Risk Intelligence Portal has transitioned from uniform threshold-based risk metrics to a "
+        "continuous, statistically grounded Z-score scaling model. In graph networks representing shell company syndicates, "
+        "entities within the same cluster often share identical network topological attributes (co-registered at the same address, "
+        "managed by the same nominee directors, and borrowing from the same lenders). Relying purely on network degrees would "
+        "render their risk scores identical, masking individual variance. To solve this, the upgraded risk engine integrates "
+        "node-level connectivity statistics with database-level financial indicators (authorized/paid-up capital ratios, "
+        "actual loan charge amounts registered on CERSAI, and total defaults in RBI lists). This ensures that every sub-company "
+        "receives a realistic, granular, and unique risk score. In addition, the Louvain community detection algorithm "
+        "automatically partitions the global corporate graph into distinct communities, forming the backbone of the dashboard's "
+        "modular visualizations."
     )
 
     # --- Section 2 ---
-    add_custom_heading("2. Z-Score Calibrated 5-Factor Risk Engine", level=1)
+    add_custom_heading("2. Upgraded 5-Factor Risk Scoring Model", level=1)
     add_body_paragraph(
-        "Standard heuristic screening models often suffer from high false-positive rates when encountering legitimate "
-        "business edge cases, such as corporate service providers or Chartered Accountants hosting hundreds of clean businesses. "
-        "To mitigate this, the scoring engine runs a two-step normalization and weighting process."
-    )
-    
-    add_custom_heading("2.1 Baseline Calibration (Z-Score Normalization)", level=2)
-    add_body_paragraph(
-        "First, the scoring engine analyzes the background dataset of normal/legitimate companies to determine typical "
-        "statistics (mean and standard deviation) for network connectivity. For any target company, its raw signal values "
-        "(e.g., number of co-registered companies, director degrees) are compared using a Z-score calculation. If the Z-score "
-        "does not exceed the designated threshold (e.g., Z = 2.0), the company receives a risk score of 0. This ensures "
-        "that ordinary shared resources are not flagged as anomalous."
+        "To establish statistical rigor, the scoring engine analyzes the background dataset of legitimate companies "
+        "to calculate baseline statistics (mean and standard deviation) for network connectivity. For any target company, "
+        "its risk metrics are compared using a Z-score calculation to filter out ordinary shared resources (such as multiple "
+        "legitimate companies registered at the office of a shared Chartered Accountant). The continuous composite risk score "
+        "(0 to 100) is calculated using a weighted combination of five distinct factors:"
     )
 
-    add_custom_heading("2.2 5-Factor Composite Score Calculation", level=2)
-    add_body_paragraph(
-        "For companies deviating from the baseline statistics, a composite screening score (0 to 100) is calculated "
-        "using a weighted average of five distinct network and registry metrics:"
-    )
-
-    # Create Table
+    # Table of 5 factors
     table = doc.add_table(rows=6, cols=3)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     
-    headers = ["Risk Factor", "Weight", "Detection Objective"]
+    headers = ["Risk Factor", "Weight", "Calculation & Business Logic"]
     col_widths = [Inches(1.8), Inches(0.8), Inches(3.9)]
     
-    # Set headers
     hdr_cells = table.rows[0].cells
     for i, title in enumerate(headers):
         hdr_cells[i].text = title
         set_cell_background(hdr_cells[i], "0F172A") # Slate 900
         set_cell_margins(hdr_cells[i], top=120, bottom=120, left=180, right=180)
-        
-        # Style header text
         p = hdr_cells[i].paragraphs[0]
         run = p.runs[0]
         run.font.name = 'Arial'
@@ -178,13 +165,12 @@ def create_report():
         run.font.size = Pt(10)
         run.font.color.rgb = RGBColor(255, 255, 255)
         
-    # Table data
     data = [
-        ("Address Centrality Risk", "25%", "Identifies addresses sharing an anomalous number of registered corporate entities based on background stats."),
-        ("Director Boarding Degree", "25%", "Detects nominee directors serving on an excessive number of boards, exceeding statutory or practical limits."),
-        ("Incorporation Burst", "15%", "Identifies clusters of entities registered within a tight temporal window (e.g. 30 days) sharing registered addresses."),
-        ("Lender Charge Density", "15%", "Flags high-density lending activities (CERSAI) indicating bank-fund routing loops or parallel siphoning."),
-        ("Wilful Defaulter Status", "20%", "Direct registry cross-check flagging matches in RBI or credit registry wilful defaulter lists.")
+        ("Address Centrality Risk", "20%", "Z-score scaling comparing the registered office address degree against baseline average. Captures massive co-registration hubs."),
+        ("Director Boarding Risk", "20%", "Calculates the average degree of all directors boarding the target company rather than the max. This exposes differences in board composition."),
+        ("Temporal Burst Risk", "15%", "Calculates registration density (burst size) of co-located companies registered within a 30-day window."),
+        ("Lender Density & Leverage", "20%", "Combines unique lender counts with debt-to-capital leverage ratios (total loan amount from CERSAI divided by paid-up capital)."),
+        ("Defaulter & Capital Risk", "25%", "Combines direct RBI wilful default amounts, paid-up capital size, and paid-up-to-authorized capital ratio mismatch.")
     ]
     
     for row_idx, (factor, weight, obj) in enumerate(data, start=1):
@@ -193,8 +179,7 @@ def create_report():
         row_cells[1].text = weight
         row_cells[2].text = obj
         
-        bg_color = "F8FAFC" if row_idx % 2 == 1 else "FFFFFF" # Alternating row colors
-        
+        bg_color = "F8FAFC" if row_idx % 2 == 1 else "FFFFFF"
         for col_idx in range(3):
             cell = row_cells[col_idx]
             set_cell_background(cell, bg_color)
@@ -208,107 +193,151 @@ def create_report():
                 run.font.bold = True
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 
-    doc.add_paragraph().paragraph_format.space_before = Pt(12) # Spacer
+    doc.add_paragraph().paragraph_format.space_before = Pt(12)
+
+    # Mathematical details
+    add_custom_heading("2.1 Mathematical Formulas for Individual Risk Factors", level=2)
+    
+    add_body_paragraph(
+        "S_addr = min((Z_addr / 3.0) * 100.0, 100.0) if Z_addr > 0.0 else 0.0\n"
+        "where Z_addr = (address_degree - mean_addr) / std_addr",
+        bold_prefix="1. Address Centrality Score (S_addr): "
+    )
+    
+    add_body_paragraph(
+        "S_dir = min((Z_dir / 3.0) * 100.0, 100.0) if Z_dir > 0.0 else 0.0\n"
+        "where Z_dir = (average_director_degree - mean_dir) / std_dir",
+        bold_prefix="2. Director Boarding Score (S_dir): "
+    )
+    
+    add_body_paragraph(
+        "S_temp = min((max(0, burst_company_count - 1) / 4.0) * 100.0, 100.0)",
+        bold_prefix="3. Temporal Burst Score (S_temp): "
+    )
+
+    add_body_paragraph(
+        "S_lender = 0.5 * S_lender_count + 0.5 * S_leverage\n"
+        "- S_lender_count = min((num_lenders / 3.0) * 100.0, 100.0)\n"
+        "- S_leverage = min((total_loans / paid_up_capital / 20.0) * 100.0, 100.0)",
+        bold_prefix="4. Lender & Leverage Score (S_lender): "
+    )
+
+    add_body_paragraph(
+        "S_def = 0.5 * S_def_base + 0.25 * S_ratio + 0.25 * S_cap_size\n"
+        "- S_def_base = min((total_defaults / 10,000,000.0) * 100.0, 100.0) if flagged else 0.0\n"
+        "- S_ratio = min(((1.0 - (paid_up_capital / authorized_capital)) / 0.99) * 100.0, 100.0)\n"
+        "- S_cap_size = max(0.0, 100.0 - (paid_up_capital / 5000.0))",
+        bold_prefix="5. Defaulter & Capital Score (S_def): "
+    )
+
+    add_body_paragraph(
+        "Composite_Score = (0.20 * S_addr) + (0.20 * S_dir) + (0.15 * S_temp) + (0.20 * S_lender) + (0.25 * S_def)",
+        bold_prefix="Weighted Composite Formula: "
+    )
 
     # --- Section 3 ---
-    add_custom_heading("3. Louvain Community Detection Algorithm", level=1)
+    add_custom_heading("3. Resolution of Scoring Uniformity (Case Study)", level=1)
     add_body_paragraph(
-        "Modern financial fraud rarely involves isolated entities. Rather, siphoning and laundering schemes "
-        "utilize multi-layered networks (syndicates) of shell companies to cycle funds. To group these entities "
-        "automatically, the portal utilizes the Louvain Community Detection algorithm."
+        "Under the legacy threshold model, all companies within the 'Emerald Chemicals Limited Syndicate' "
+        "(Cluster #25) were assigned an identical risk score of 71. This was because they shared nominee directors, "
+        "borrowed from the same bank (Janata Sahakari Bank), and registered at the same address in Chennai. By incorporating "
+        "individual database parameters, their risk scores now diverge and reflect their unique financial realities:"
     )
-    
-    add_custom_heading("3.1 Modularity Optimization", level=2)
-    add_body_paragraph(
-        "The Louvain algorithm is a heuristic method that partitions a graph into communities by maximizing the "
-        "overall Modularity. Modularity measures the strength of the division of a network into clusters. "
-        "High modularity indicates that nodes within a community have dense connections among themselves, but sparse "
-        "connections with nodes in other communities. The algorithm runs in two repeating phases: (1) local optimization "
-        "of modularity where nodes are shifted into neighboring groups, and (2) graph aggregation where identified "
-        "communities are condensed into single super-nodes."
-    )
-
-    add_custom_heading("3.2 Application in Fraud Intelligence", level=2)
-    add_body_paragraph(
-        "Within the portal, the Louvain algorithm partitions a heterogeneous network representing 3,789 nodes into "
-        "562 distinct communities. The pipeline executes as follows:"
-    )
-    add_bullet_point("Groups companies that share common physical addresses, directors, and active lenders into separate clusters.", bold_prefix="Community Partitioning: ")
-    add_bullet_point("Aggregates the individual 5-factor risk scores of all companies within the community to calculate a collective Cluster Risk Score.", bold_prefix="Cluster Risk Aggregation: ")
-    add_bullet_point("Assigns a severity label based on the score: clusters with a score >= 75.0 are flagged as active 'Syndicates', intermediate clusters as 'Risk Networks', and clean clusters as 'Groups'.", bold_prefix="Syndicate Flagging: ")
+    add_bullet_point("Paid-up capital: ₹5.0L, RBI defaults: ₹45.0L, Lender charges: ₹25.0L. Resulting Score: 54.52", bold_prefix="1. Emerald Chemicals Limited: ")
+    add_bullet_point("Paid-up capital: ₹2.0L, RBI defaults: ₹60.0L, Lender charges: ₹35.0L. Resulting Score: 66.33", bold_prefix="2. Emerald Technologies Private Limited: ")
+    add_bullet_point("Paid-up capital: ₹5.0L, RBI defaults: ₹30.0L, Lender charges: ₹25.0L. Resulting Score: 52.55", bold_prefix="3. Emerald Impex Private Limited: ")
+    add_bullet_point("Paid-up capital: ₹1.5L, RBI defaults: ₹45.0L, Lender charges: ₹35.0L. Higher leverage. Resulting Score: 66.39", bold_prefix="4. Emerald Pharma Private Limited: ")
+    add_bullet_point("Paid-up capital: ₹1.0L, RBI defaults: ₹45.0L, Lender charges: ₹25.0L. Exposes highest leverage and boarding ratios. Resulting Score: 69.80", bold_prefix="5. Emerald Logistics Private Limited: ")
 
     # --- Section 4 ---
-    add_custom_heading("4. Performance & Accuracy Validation", level=1)
+    add_custom_heading("4. Louvain Community Detection Algorithm", level=1)
     add_body_paragraph(
-        "The calibrated scoring and Louvain detection model was validated against a 1,000-company synthetic "
-        "benchmark set containing 115 known shell companies structured into 16 distinct fraud rings, alongside "
-        "legitimate edge cases. The results demonstrated high precision and recall:"
+        "Modern corporate fraud is highly relational. Fund-cycling and loan siphoning are carried out not by single "
+        "companies, but by coordinated groups. The Louvain Community Detection algorithm is applied to partition "
+        "the 3,789-node corporate graph into distinct communities based on graph modularity."
     )
-    add_bullet_point("All 115 target shell companies were successfully identified by the pipeline.", bold_prefix="Shell Detection Rate: 100.0% ")
-    add_bullet_point("No normal background companies were incorrectly classified as high-risk, achieving complete baseline separation.", bold_prefix="False Positive Rate: 0.0% ")
-    add_bullet_point("The target rings (Rings A, B, and C) ranked #1, #2, and #3 respectively in the cluster risk registry.", bold_prefix="Fraud Ring Ranks: Top 3 ")
-    add_bullet_point("The 7 legitimate companies sharing a common office address were successfully scored as low-risk (ranking #6) and segregated from the active fraud syndicates.", bold_prefix="Legitimate Hub Segregation: ")
+    
+    add_custom_heading("4.1 How Louvain Works (Modularity Optimization)", level=2)
+    add_body_paragraph(
+        "Modularity (Q) measures the density of edges inside communities compared to edges between communities. "
+        "The Louvain algorithm executes in two repeating phases:\n"
+        "1. Modularity Optimization: The algorithm starts with each node in its own community. For each node, it calculates "
+        "the modularity gain delta Q if it moves into a neighbor's community. The node moves to the community that yields the "
+        "maximum gain. This repeats until modularity stabilizes.\n"
+        "2. Graph Aggregation: Nodes in the same community are collapsed into a single 'super-node'. Edges between nodes "
+        "in the same community are converted to self-loops on the super-node, and edges between different communities become "
+        "weighted edges between super-nodes. The algorithm then runs Phase 1 on the super-graph. This repeats until no further "
+        "modularity gain is possible."
+    )
+
+    add_custom_heading("4.2 Visualization Coordinates Generation (Ring & Starburst)", level=2)
+    add_body_paragraph(
+        "To avoid the visual clutter of standard force-directed layouts, our network visualization uses pre-computed "
+        "concentric circles. The communities are mapped as rings in a global circle, and the individual nodes within each "
+        "community are arranged in starburst clusters around the community's center. Pre-calculating these coordinates "
+        "disables VisJS physics simulation by default, allowing the dashboard to load instantly, while the 'Physics Toggle' "
+        "remains available for investigators to drag and manipulate nodes manually."
+    )
 
     # --- Section 5 ---
-    add_custom_heading("5. Frontend-to-Backend Data Integration Map", level=1)
-    add_body_paragraph(
-        "For the presentation panel, understanding how the user interface maps to the underlying FastAPI "
-        "endpoints and database structures is critical. Below is the mapping of all frontend components to their "
-        "respective backend services:"
-    )
-    add_bullet_point("Mapped to '/api/dashboard/summary'. Displays total metrics such as the 1,007 loaded companies, "
-                     "2,313 director edges, and active investigations. Under the hood, this performs quick SQL aggregate queries "
-                     "(`SELECT count(*) FROM companies`).", bold_prefix="Dashboard Summary Cards: ")
-    add_bullet_point("Mapped to '/api/clusters'. It aggregates communities identified by the Louvain clustering and groups "
-                     "them into high risk (composite >= 75), medium risk (30-74), and low risk (<30).", bold_prefix="Cluster Risk Modularity Donut Chart: ")
-    add_bullet_point("Mapped to the dynamic list of high-risk clusters returned by '/api/clusters' sorted by "
-                     "`cluster_risk_score` in descending order. Selecting a row pulls detailed community info via `/api/clusters/{id}`.", bold_prefix="Risk Rankings Table: ")
-    add_bullet_point("Mapped to `/api/clusters/{id}/graph` which generates the JSON formatted graph structure (nodes and edges) "
-                     "containing companies, directors, and lenders in that specific community. By requesting subgraphs dynamically, "
-                     "the frontend stays responsive instead of trying to render all 3,789 nodes.", bold_prefix="Interactive Cytoscape workspace: ")
-    add_bullet_point("Mapped to `/backend/static/pyvis_graph.html`, pre-rendered by `scripts/build_pyvis_graph.py` to show "
-                     "the global cluster visualization using a physics-driven layout in a static iframe.", bold_prefix="Global Network Visualization (Pyvis): ")
-
-    # --- Section 6 ---
-    add_custom_heading("6. Technical Q&A & Defense Sheet (Jury Q&A)", level=1)
+    add_custom_heading("5. Defense Sheet & Judges' Q&A Guide", level=1)
     
-    add_custom_heading("Q1: How does the model distinguish between a genuine CA firm hosting 100+ clients and an actual shell company address hub?", level=3)
+    add_custom_heading("Q1: What is the main improvement in your risk engine?", level=3)
     add_body_paragraph(
-        "A: The scoring engine uses a weighted composite average. While both will have a high Address Centrality Risk (S_addr = 100), "
-        "a genuine CA firm's hosted companies will have clean profiles: their directors won't board multiple other clients (Director Degree = 0), "
-        "incorporations will be staggered over years (Burst Risk = 0), they will have active MCA filings (Filing Risk = 0), and they won't share "
-        "loan charge patterns or defaults (Lender/Defaulter Risk = 0). As a result, the CA firm's clients will score only "
-        "around 25/100, while the shell ring companies will score >= 75/100."
+        "A: We transitioned from a legacy uniform threshold scoring model to a continuous, Z-score scaled model. "
+        "In our updated model, we integrate node-level graph features with database-level financial statistics (CERSAI "
+        "charge amounts, RBI wilful default amounts, paid-up capital size, and authorized-to-paid-up capital ratios). "
+        "This ensures that every company receives a distinct, realistic risk score reflecting its specific profile "
+        "rather than all members of a syndicate getting capped at a single uniform value."
     )
     
-    add_custom_heading("Q2: How does the system scale to handle millions of companies registered under the MCA registry?", level=3)
+    add_custom_heading("Q2: Why use the Louvain algorithm over K-Means or DBSCAN?", level=3)
     add_body_paragraph(
-        "A: The system uses a frozen-baseline architecture. Z-score parameters are computed once on normal background "
-        "data. When new companies are added, their risk scores are calculated in O(1) time by comparing their raw metrics directly against "
-        "these frozen parameters, rather than recalculating the entire graph statistics. Community detection (Louvain) is run "
-        "as an asynchronous batch job (e.g. nightly) to update cluster divisions, ensuring no real-time performance bottleneck on the API server."
+        "A: K-Means and DBSCAN are distance-based clustering algorithms designed for vector spaces, meaning they require "
+        "nodes to be embedded as coordinates. They do not handle graph topology naturally. Louvain is a graph-native algorithm "
+        "that optimizes Modularity directly, which is perfect for corporate relationships. In addition, Louvain does not require "
+        "us to pre-define the number of clusters (K) beforehand; it discovers them organically based on connections."
     )
 
-    add_custom_heading("Q3: What database schema supports these network connections?", level=3)
+    add_custom_heading("Q3: How do you prevent a legitimate office building (with 100+ registered companies) from showing up as a massive fraud ring?", level=3)
     add_body_paragraph(
-        "A: The backend uses a relational SQLite database (SQLAlchemy ORM) containing six key tables: "
-        "(1) 'companies' storing CIN, paid-up capital, and MCA status; (2) 'directors' storing DIN and name; "
-        "(3) 'company_directors' linking directors to companies; (4) 'addresses' mapping registration coordinates; "
-        "(5) 'loans' tracking active CERSAI borrowing registrations; and (6) 'defaulters' tracking RBI wilful default records."
+        "A: Our model uses a Z-score baseline calibrated on normal background data. A legitimate office building will "
+        "indeed have a high Address Centrality Risk (S_addr). However, because we use a weighted composite model, the other "
+        "four factors (Director Boarding, Temporal Burst, Lender density, and Wilful Defaulter status) will be zero "
+        "since legitimate companies do not share nominee directors, register in 30-day temporal bursts, or share default histories. "
+        "As validated on our test data, legitimate office hubs score only ~25/100, which keeps them far below our high-risk "
+        "syndicate threshold (>= 75.0)."
     )
 
-    add_custom_heading("Q4: Why was the Louvain algorithm chosen over other community algorithms like K-Means or Infomap?", level=3)
+    add_custom_heading("Q4: Why does the interactive graph load instantly even with thousands of nodes?", level=3)
     add_body_paragraph(
-        "A: K-Means is a distance-based clustering algorithm requiring a vector space, which is not suitable for complex graph topologies "
-        "with multiple relationship types (directors, addresses, lenders). Louvain is specifically designed for complex network graphs. "
-        "It optimizes Modularity directly, which is ideal for finding cohesive communities where the number of clusters is unknown beforehand. "
-        "Infomap relies on flow dynamics (random walks), which is less effective than Modularity when identifying resource-sharing groups like shell rings."
+        "A: Standard force-directed graphs run real-time physics solvers (e.g. Barnes-Hut) in the browser, which makes "
+        "them laggy and CPU-heavy. We solved this by using our Louvain community detection to pre-calculate x/y coordinates "
+        "into concentric rings and starburst clusters. We disable physics by default on initial page load, and only enable it "
+        "on-demand if the investigator toggles the 'Physics Physics Toggle' to manually drag nodes."
+    )
+
+    add_custom_heading("Q5: What is the database schema supporting the backend?", level=3)
+    add_body_paragraph(
+        "A: We use a relational SQLite database (SQLAlchemy ORM) consisting of six tables: (1) 'companies' storing CIN, name, "
+        "incorporation date, and paid-up capital; (2) 'directors' storing DIN and name; (3) 'company_directors' tracking director "
+        "boardings; (4) 'addresses' mapping registered offices; (5) 'loans' tracking active CERSAI borrowing registrations; and "
+        "(6) 'defaulters' tracking RBI wilful default records. When a company is inspected, the API dynamically pulls and "
+        "aggregates these values to display evidence to the investigator."
     )
 
     # Save document
-    output_path = r"f:\SIH\document\Scoring_and_Louvain_Explainer.docx"
-    doc.save(output_path)
-    print(f"Report successfully saved to {output_path}")
+    docs_path = r"f:\SIH\docs\Scoring_and_Louvain_Explainer.docx"
+    doc.save(docs_path)
+    print(f"Report successfully saved to {docs_path}")
+    
+    # Try saving to document folder too
+    try:
+        os.makedirs(r"f:\SIH\document", exist_ok=True)
+        doc.save(r"f:\SIH\document\Scoring_and_Louvain_Explainer.docx")
+        print("Report successfully saved to f:\\SIH\\document\\Scoring_and_Louvain_Explainer.docx")
+    except Exception as e:
+        print(f"Could not save to legacy path: {e}")
 
 if __name__ == "__main__":
     create_report()

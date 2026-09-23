@@ -15,6 +15,8 @@ import {
   TrendingUp,
   BookOpen,
   Scale
+  ,ArrowLeft
+  ,LogOut
 } from 'lucide-react';
 import {
   AreaChart,
@@ -31,7 +33,7 @@ import {
   YAxis
 } from 'recharts';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
 
 interface SummaryData {
   total_companies: number;
@@ -56,6 +58,7 @@ interface ClusterSummary {
   date_spread_days: number;
   network_density: number;
   cluster_risk_score: number;
+  risk_category: string;
 }
 
 interface CompanyDetail {
@@ -89,6 +92,7 @@ interface ClusterDetail {
   date_spread_days: number;
   network_density: number;
   cluster_risk_score: number;
+  risk_category: string;
   companies_detailed: CompanyDetail[];
   directors: string[];
   addresses: string[];
@@ -115,6 +119,12 @@ interface EvidenceData {
 
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => sessionStorage.getItem('investigator_session') === 'active');
+  const [investigatorName, setInvestigatorName] = useState(() => sessionStorage.getItem('investigator_name') || '');
+  const [loginUsername, setLoginUsername] = useState('demo.investigator');
+  const [loginPassword, setLoginPassword] = useState('SFIO_DEMO_2026');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'rankings' | 'explorer'>('overview');
   const [summary, setSummary] = useState<SummaryData | null>(null);
   const [clusters, setClusters] = useState<ClusterSummary[]>([]);
@@ -136,16 +146,17 @@ export default function App() {
 
   // Fetch summary and cluster list on startup
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetchSummary();
     fetchClusters();
-  }, []);
+  }, [isAuthenticated]);
 
   // Fetch detail when selectedClusterId changes
   useEffect(() => {
-    if (selectedClusterId !== null) {
+    if (isAuthenticated && selectedClusterId !== null) {
       fetchClusterDetail(selectedClusterId);
     }
-  }, [selectedClusterId]);
+  }, [isAuthenticated, selectedClusterId]);
 
   // Trigger graph rendering when switching tabs or when graph elements load
   useEffect(() => {
@@ -282,6 +293,46 @@ export default function App() {
     } catch (e) {
       console.error("Failed to fetch evidence details", e);
     }
+  };
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword })
+      });
+      if (!response.ok) {
+        throw new Error('Invalid investigator credentials');
+      }
+      const data = await response.json();
+      sessionStorage.setItem('investigator_session', 'active');
+      sessionStorage.setItem('investigator_name', data.investigator.display_name);
+      sessionStorage.setItem('investigator_token', data.token);
+      setInvestigatorName(data.investigator.display_name);
+      setIsAuthenticated(true);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : 'Unable to sign in');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    sessionStorage.removeItem('investigator_session');
+    sessionStorage.removeItem('investigator_name');
+    sessionStorage.removeItem('investigator_token');
+    setIsAuthenticated(false);
+    setActiveTab('overview');
+  };
+
+  const goBackToDashboard = () => {
+    setActiveTab('overview');
+    setSelectedEntity(null);
+    setEvidence(null);
   };
 
 
@@ -496,10 +547,9 @@ export default function App() {
 
   const riskDistributionData = clusters.reduce((acc: any[], curr) => {
     const score = curr.cluster_risk_score;
-    let range = 'Low (<30)';
-    if (score >= 75) range = 'Critical (>=75)';
-    else if (score >= 50) range = 'High (50-74)';
-    else if (score >= 30) range = 'Medium (30-49)';
+    let range = 'Low (<40)';
+    if (score >= 75) range = 'High (>=75)';
+    else if (score >= 40) range = 'Medium (40-74)';
 
     const existing = acc.find(item => item.name === range);
     if (existing) {
@@ -511,6 +561,37 @@ export default function App() {
   }, []);
 
   const PIE_COLORS = ['#059669', '#D97706', '#DC2626', '#7C3AED'];
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-md glass-panel p-8 animate-fade-in">
+          <div className="border-l-4 border-[#FF9933] pl-4 mb-8">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Restricted Investigator Workspace</p>
+            <h1 className="text-2xl font-extrabold text-[#183a6b] mt-2">Investigator Sign In</h1>
+            <p className="text-xs text-slate-500 mt-2">MCA21 Risk Intelligence Portal</p>
+          </div>
+          <form onSubmit={handleLogin} className="space-y-4">
+            <label className="block text-xs font-bold text-slate-600">
+              Investigator ID
+              <input value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} className="mt-1.5 w-full border border-slate-300 rounded-md px-3 py-2.5 text-sm font-normal text-slate-800 focus:outline-none focus:border-[#183a6b]" autoComplete="username" />
+            </label>
+            <label className="block text-xs font-bold text-slate-600">
+              Access key
+              <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} className="mt-1.5 w-full border border-slate-300 rounded-md px-3 py-2.5 text-sm font-normal text-slate-800 focus:outline-none focus:border-[#183a6b]" autoComplete="current-password" />
+            </label>
+            {loginError && <p className="text-xs font-semibold text-red-600" role="alert">{loginError}</p>}
+            <button type="submit" disabled={loginLoading} className="w-full bg-[#183a6b] text-white rounded-md py-2.5 text-xs font-bold hover:bg-[#102d56] disabled:opacity-60">
+              {loginLoading ? 'Authenticating...' : 'Sign in'}
+            </button>
+          </form>
+          <div className="mt-6 pt-4 border-t border-slate-200 text-[10px] text-slate-500">
+            Demo investigator: <span className="font-mono text-slate-700">demo.investigator</span> / <span className="font-mono text-slate-700">SFIO_DEMO_2026</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col min-h-screen bg-slate-50 text-slate-800">
@@ -530,6 +611,10 @@ export default function App() {
         <div className="flex items-center space-x-3">
           <span className="opacity-90">SFIO Restricted Workspace</span>
           <span className="bg-red-900/80 text-red-100 border border-red-700/80 px-2 py-0.5 rounded-[4px] font-bold text-[9px] shadow-sm tracking-wider">SECURE SESSION</span>
+          <span className="text-[10px] font-semibold text-slate-200">{investigatorName}</span>
+          <button onClick={handleLogout} title="Sign out" className="text-slate-300 hover:text-white" aria-label="Sign out">
+            <LogOut className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
@@ -555,6 +640,11 @@ export default function App() {
 
         {/* Tab Navigation (Flat Government Style) */}
         <nav className="flex space-x-1 bg-slate-100/80 p-1.5 rounded-lg border border-slate-200">
+          {activeTab !== 'overview' && (
+            <button onClick={goBackToDashboard} title="Back to dashboard" aria-label="Back to dashboard" className="px-2.5 py-2 text-xs font-semibold rounded-md text-slate-600 hover:bg-slate-200 flex items-center gap-1.5">
+              <ArrowLeft className="w-3.5 h-3.5" /> Back
+            </button>
+          )}
           <button
             onClick={() => setActiveTab('overview')}
             className={`px-4 py-2 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5 ${activeTab === 'overview' ? 'bg-[#183a6b] text-white shadow-md' : 'text-slate-600 hover:bg-slate-200'}`}
@@ -765,7 +855,7 @@ export default function App() {
                 </thead>
                 <tbody>
                   {filteredClusters.map((c) => (
-                    <tr key={c.cluster_id} className={c.cluster_risk_score >= 75 ? 'bg-red-50/30' : ''}>
+                    <tr key={c.cluster_id} className={c.cluster_risk_score >= 70 ? 'bg-red-50/30' : ''}>
                       <td className="font-bold text-slate-400">#{c.rank}</td>
                       <td>
                         <div className="font-bold text-slate-900 leading-tight">{c.cluster_name}</div>
@@ -779,12 +869,13 @@ export default function App() {
                       <td>{(c.network_density * 100).toFixed(1)}%</td>
                       <td>{c.average_company_risk.toFixed(1)}</td>
                       <td>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${c.cluster_risk_score >= 75 ? 'bg-red-50 text-red-700 border-red-200' :
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${c.cluster_risk_score >= 70 ? 'bg-red-50 text-red-700 border-red-200' :
                           c.cluster_risk_score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-200' :
                             'bg-emerald-50 text-emerald-700 border-emerald-200'
                           }`}>
                           {c.cluster_risk_score.toFixed(1)}
                         </span>
+                        <div className="text-[9px] text-slate-500 font-semibold mt-1">{c.risk_category}</div>
                       </td>
                       <td>
                         <button
@@ -871,7 +962,7 @@ export default function App() {
                       <div className="flex items-center justify-between mt-2.5 text-[9px] font-semibold border-t border-slate-100 pt-1.5">
                         <span className="text-slate-400">Paid-up: ₹{(c.paidup_capital / 100000).toFixed(1)}L</span>
                         <span className={`px-1.5 py-0.5 rounded font-bold border ${c.scores.composite_score >= 75 ? 'bg-red-50 text-red-700 border-red-100' :
-                          c.scores.composite_score >= 50 ? 'bg-amber-50 text-amber-700 border-amber-100' :
+                          c.scores.composite_score >= 40 ? 'bg-amber-50 text-amber-700 border-amber-100' :
                             'bg-emerald-50 text-emerald-700 border-emerald-100'
                           }`}>
                           Score: {c.scores.composite_score.toFixed(0)}
@@ -1045,10 +1136,10 @@ export default function App() {
                           <h4 className="text-xl font-bold text-slate-900 mt-0.5">{evidence.composite_score.toFixed(1)} <span className="text-xs text-slate-400 font-normal">/ 100</span></h4>
                         </div>
                         <div className={`px-2 py-0.5 rounded text-[10px] font-bold border ${evidence.composite_score >= 75 ? 'bg-red-100 text-red-800 border-red-200' :
-                          evidence.composite_score >= 50 ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                          evidence.composite_score >= 40 ? 'bg-amber-100 text-amber-800 border-amber-200' :
                             'bg-emerald-100 text-emerald-800 border-emerald-200'
                           }`}>
-                          {evidence.composite_score >= 75 ? 'CRITICAL' : evidence.composite_score >= 50 ? 'HIGH RISK' : 'COMPLIANT'}
+                          {evidence.composite_score >= 75 ? 'HIGH RISK' : evidence.composite_score >= 40 ? 'MEDIUM RISK' : 'COMPLIANT'}
                         </div>
                       </div>
 

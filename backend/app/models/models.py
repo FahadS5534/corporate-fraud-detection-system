@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Date, Numeric, Integer, ForeignKey
+from sqlalchemy import Column, String, Date, Numeric, Integer, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from backend.app.database import Base
 
@@ -28,6 +28,9 @@ class DirectorRelationship(Base):
     din = Column(String(10), index=True, nullable=False)
     director_name = Column(String(255), nullable=False)
     cin = Column(String(21), ForeignKey("companies.cin"), nullable=False)
+    appointment_date = Column(Date, nullable=True)
+    resignation_date = Column(Date, nullable=True)
+    is_active = Column(Boolean, default=True)
 
     # Relationships
     company = relationship("Company", back_populates="directors")
