@@ -2,10 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "backend/app/main.py": {
-      "includeFiles": [
-        "data/sih_fraud_detection.db",
-        "backend/static/**"
-      ],
+      "includeFiles": "{data/sih_fraud_detection.db,backend/static/**}",
       "maxDuration": 60
     }
   }
