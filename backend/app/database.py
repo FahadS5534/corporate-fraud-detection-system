@@ -7,7 +7,11 @@ from sqlalchemy.orm import sessionmaker
 # Resolve the seeded database from the repository root. This keeps the data
 # available in a Vercel function bundle, whose filesystem is read-only.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SQLITE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'sih_fraud_detection.db').as_posix()}"
+DATABASE_PATH = (PROJECT_ROOT / "data" / "sih_fraud_detection.db").as_posix()
+if os.environ.get("VERCEL") == "1":
+    DEFAULT_SQLITE_URL = f"sqlite:///file:{DATABASE_PATH}?mode=ro&uri=true"
+else:
+    DEFAULT_SQLITE_URL = f"sqlite:///{DATABASE_PATH}"
 
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
 
